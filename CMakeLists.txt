@@ -446,7 +446,11 @@ set(SOURCES
         util/xxhash.cc
         utilities/backupable/backupable_db.cc
         utilities/blob_db/blob_db.cc
-        utilities/checkpoint/checkpoint.cc
+        utilities/blob_db/blob_db_impl.cc
+        utilities/blob_db/blob_log_reader.cc
+        utilities/blob_db/blob_log_writer.cc
+        utilities/blob_db/blob_log_format.cc
+        utilities/checkpoint/checkpoint_impl.cc
         utilities/col_buf_decoder.cc
         utilities/col_buf_encoder.cc
         utilities/column_aware_encoding_util.cc
@@ -506,16 +510,14 @@ else()
     env/io_posix.cc)
 endif()
 
+set(ROCKSDB_STATIC_LIB rocksdb${ARTIFACT_SUFFIX})
+set(ROCKSDB_SHARED_LIB rocksdb-shared${ARTIFACT_SUFFIX})
+set(ROCKSDB_IMPORT_LIB ${ROCKSDB_SHARED_LIB})
 if(WIN32)
   set(SYSTEM_LIBS ${SYSTEM_LIBS} Shlwapi.lib Rpcrt4.lib)
-  set(ROCKSDB_STATIC_LIB rocksdblib${ARTIFACT_SUFFIX})
-  set(ROCKSDB_IMPORT_LIB rocksdb${ARTIFACT_SUFFIX})
   set(LIBS ${ROCKSDB_STATIC_LIB} ${THIRDPARTY_LIBS} ${SYSTEM_LIBS})
 else()
   set(SYSTEM_LIBS ${CMAKE_THREAD_LIBS_INIT} rt)
-  set(ROCKSDB_STATIC_LIB rocksdb${ARTIFACT_SUFFIX})
-  set(ROCKSDB_SHARED_LIB rocksdb-shared)
-  set(ROCKSDB_IMPORT_LIB ${ROCKSDB_SHARED_LIB})
   set(LIBS ${ROCKSDB_SHARED_LIB} ${THIRDPARTY_LIBS} ${SYSTEM_LIBS})
 
   add_library(${ROCKSDB_SHARED_LIB} SHARED ${SOURCES})
@@ -592,6 +594,7 @@ set(TESTS
         db/db_properties_test.cc
         db/db_range_del_test.cc
         db/db_sst_test.cc
+        db/db_statistics_test.cc
         db/db_table_properties_test.cc
         db/db_tailing_iter_test.cc
         db/db_test.cc
@@ -659,6 +662,7 @@ set(TESTS
         util/heap_test.cc
         util/rate_limiter_test.cc
         util/slice_transform_test.cc
+        util/timer_queue_test.cc
         util/thread_list_test.cc
         util/thread_local_test.cc
         utilities/backupable/backupable_db_test.cc

@@ -1,11 +1,18 @@
 # Rocksdb Change Log
 ## Unreleased
 ### New Features
+* FIFO compaction to support Intra L0 compaction too with CompactionOptionsFIFO.allow_compaction=true.
 * DB::ResetStats() to reset internal stats.
+* Statistics::Reset() to reset user stats.
 * ldb add option --try_load_options, which will open DB with its own option file.
+* Introduce WriteBatch::PopSavePoint to pop the most recent save point explicitly.
+* Support dynamically change `max_open_files` option via SetDBOptions()
+* Added DB::CreateColumnFamilie() and DB::DropColumnFamilies() to bulk create/drop column families.
 
 ## 5.4.0 (04/11/2017)
 ### Public API Change
+* random_access_max_buffer_size no longer has any effect
+* Removed Env::EnableReadAhead(), Env::ShouldForwardRawRequest()
 * Support dynamically change `stats_dump_period_sec` option via SetDBOptions().
 * Added ReadOptions::max_skippable_internal_keys to set a threshold to fail a request as incomplete when too many keys are being skipped when using iterators.
 * DB::Get in place of std::string accepts PinnableSlice, which avoids the extra memcpy of value to std::string in most of cases.

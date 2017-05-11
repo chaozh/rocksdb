@@ -2,6 +2,8 @@
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
+//  This source code is also licensed under the GPLv2 license found in the
+//  COPYING file in the root directory of this source tree.
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -25,6 +27,7 @@
 #ifdef OS_LINUX
 #include <sys/statfs.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #endif
 #include "env/posix_logger.h"
 #include "monitoring/iostats_context_imp.h"
@@ -37,7 +40,7 @@
 namespace rocksdb {
 
 // A wrapper for fadvise, if the platform doesn't support fadvise,
-// it will simply return Status::NotSupport.
+// it will simply return 0.
 int Fadvise(int fd, off_t offset, size_t len, int advice) {
 #ifdef OS_LINUX
   return posix_fadvise(fd, offset, len, advice);
@@ -115,18 +118,13 @@ size_t GetLogicalBufferSize(int __attribute__((__unused__)) fd) {
  */
 #ifndef NDEBUG
 namespace {
-#ifdef OS_LINUX
-const size_t kPageSize = sysconf(_SC_PAGESIZE);
-#else
-const size_t kPageSize = 4 * 1024;
-#endif
 
 bool IsSectorAligned(const size_t off, size_t sector_size) {
   return off % sector_size == 0;
 }
 
-static bool IsPageAligned(const void* ptr) {
-  return uintptr_t(ptr) % (kPageSize) == 0;
+bool IsSectorAligned(const void* ptr, size_t sector_size) {
+  return uintptr_t(ptr) % sector_size == 0;
 }
 
 }
@@ -182,6 +180,11 @@ Status PosixSequentialFile::Read(size_t n, Slice* result, char* scratch) {
 
 Status PosixSequentialFile::PositionedRead(uint64_t offset, size_t n,
                                            Slice* result, char* scratch) {
+  if (use_direct_io()) {
+    assert(IsSectorAligned(offset, GetRequiredBufferAlignment()));
+    assert(IsSectorAligned(n, GetRequiredBufferAlignment()));
+    assert(IsSectorAligned(scratch, GetRequiredBufferAlignment()));
+  }
   Status s;
   ssize_t r = -1;
   size_t left = n;
@@ -306,6 +309,11 @@ PosixRandomAccessFile::~PosixRandomAccessFile() { close(fd_); }
 
 Status PosixRandomAccessFile::Read(uint64_t offset, size_t n, Slice* result,
                                    char* scratch) const {
+  if (use_direct_io()) {
+    assert(IsSectorAligned(offset, GetRequiredBufferAlignment()));
+    assert(IsSectorAligned(n, GetRequiredBufferAlignment()));
+    assert(IsSectorAligned(scratch, GetRequiredBufferAlignment()));
+  }
   Status s;
   ssize_t r = -1;
   size_t left = n;
@@ -333,6 +341,26 @@ Status PosixRandomAccessFile::Read(uint64_t offset, size_t n, Slice* result,
     s = IOError(filename_, errno);
   }
   *result = Slice(scratch, (r < 0) ? 0 : n - left);
+  return s;
+}
+
+Status PosixRandomAccessFile::Prefetch(uint64_t offset, size_t n) {
+  Status s;
+  if (!use_direct_io()) {
+    ssize_t r = 0;
+#ifdef OS_LINUX
+    r = readahead(fd_, offset, n);
+#endif
+#ifdef OS_MACOSX
+    radvisory advice;
+    advice.ra_offset = static_cast<off_t>(offset);
+    advice.ra_count = static_cast<int>(n);
+    r = fcntl(fd_, F_RDADVISE, &advice);
+#endif
+    if (r == -1) {
+      s = IOError(filename_, errno);
+    }
+  }
   return s;
 }
 
@@ -684,9 +712,10 @@ PosixWritableFile::~PosixWritableFile() {
 }
 
 Status PosixWritableFile::Append(const Slice& data) {
-  assert(!use_direct_io() ||
-         (IsSectorAligned(data.size(), GetRequiredBufferAlignment()) &&
-          IsPageAligned(data.data())));
+  if (use_direct_io()) {
+    assert(IsSectorAligned(data.size(), GetRequiredBufferAlignment()));
+    assert(IsSectorAligned(data.data(), GetRequiredBufferAlignment()));
+  }
   const char* src = data.data();
   size_t left = data.size();
   while (left != 0) {
@@ -705,10 +734,11 @@ Status PosixWritableFile::Append(const Slice& data) {
 }
 
 Status PosixWritableFile::PositionedAppend(const Slice& data, uint64_t offset) {
-  assert(use_direct_io() &&
-         IsSectorAligned(offset, GetRequiredBufferAlignment()) &&
-         IsSectorAligned(data.size(), GetRequiredBufferAlignment()) &&
-         IsPageAligned(data.data()));
+  if (use_direct_io()) {
+    assert(IsSectorAligned(offset, GetRequiredBufferAlignment()));
+    assert(IsSectorAligned(data.size(), GetRequiredBufferAlignment()));
+    assert(IsSectorAligned(data.data(), GetRequiredBufferAlignment()));
+  }
   assert(offset <= std::numeric_limits<off_t>::max());
   const char* src = data.data();
   size_t left = data.size();
