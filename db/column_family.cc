@@ -172,6 +172,12 @@ ColumnFamilyOptions SanitizeOptions(const ImmutableDBOptions& db_options,
       result.num_levels < 2) {
     result.num_levels = 2;
   }
+
+  if (result.compaction_style == kCompactionStyleUniversal &&
+      db_options.allow_ingest_behind && result.num_levels < 3) {
+    result.num_levels = 3;
+  }
+
   if (result.max_write_buffer_number < 2) {
     result.max_write_buffer_number = 2;
   }
@@ -723,7 +729,7 @@ void ColumnFamilyData::RecalculateWriteStallConditions(
               mutable_cf_options.level0_slowdown_writes_trigger)) {
         write_controller_token_ =
             write_controller->GetCompactionPressureToken();
-        ROCKS_LOG_WARN(
+        ROCKS_LOG_INFO(
             ioptions_.info_log,
             "[%s] Increasing compaction threads because we have %d level-0 "
             "files ",
@@ -737,7 +743,7 @@ void ColumnFamilyData::RecalculateWriteStallConditions(
         write_controller_token_ =
             write_controller->GetCompactionPressureToken();
         if (mutable_cf_options.soft_pending_compaction_bytes_limit > 0) {
-          ROCKS_LOG_WARN(
+          ROCKS_LOG_INFO(
               ioptions_.info_log,
               "[%s] Increasing compaction threads because of estimated pending "
               "compaction "

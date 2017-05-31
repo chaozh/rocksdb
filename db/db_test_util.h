@@ -49,10 +49,7 @@
 #include "util/mutexlock.h"
 
 #include "util/string_util.h"
-// SyncPoint is not supported in Released Windows Mode.
-#if !(defined NDEBUG) || !defined(OS_WIN)
 #include "util/sync_point.h"
-#endif  // !(defined NDEBUG) || !defined(OS_WIN)
 #include "util/testharness.h"
 #include "util/testutil.h"
 #include "utilities/merge_operators.h"
@@ -586,6 +583,28 @@ class OnFileDeletionListener : public EventListener {
 };
 #endif
 
+// A test merge operator mimics put but also fails if one of merge operands is
+// "corrupted".
+class TestPutOperator : public MergeOperator {
+ public:
+  virtual bool FullMergeV2(const MergeOperationInput& merge_in,
+                           MergeOperationOutput* merge_out) const override {
+    if (merge_in.existing_value != nullptr &&
+        *(merge_in.existing_value) == "corrupted") {
+      return false;
+    }
+    for (auto value : merge_in.operand_list) {
+      if (value == "corrupted") {
+        return false;
+      }
+    }
+    merge_out->existing_operand = merge_in.operand_list.back();
+    return true;
+  }
+
+  virtual const char* Name() const override { return "TestPutOperator"; }
+};
+
 class DBTestBase : public testing::Test {
  protected:
   // Sequence of option configurations to try
@@ -620,12 +639,13 @@ class DBTestBase : public testing::Test {
     kRowCache = 27,
     kRecycleLogFiles = 28,
     kConcurrentSkipList = 29,
-    kEnd = 30,
-    kLevelSubcompactions = 31,
-    kUniversalSubcompactions = 32,
-    kBlockBasedTableWithIndexRestartInterval = 33,
-    kBlockBasedTableWithPartitionedIndex = 34,
-    kPartitionedFilterWithNewTableReaderForCompactions = 35,
+    kDirectIO = 30,
+    kEnd = 31,
+    kLevelSubcompactions = 32,
+    kUniversalSubcompactions = 33,
+    kBlockBasedTableWithIndexRestartInterval = 34,
+    kBlockBasedTableWithPartitionedIndex = 35,
+    kPartitionedFilterWithNewTableReaderForCompactions = 36,
   };
   int option_config_;
 

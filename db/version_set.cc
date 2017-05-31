@@ -136,8 +136,8 @@ class FilePicker {
 
         // Do key range filtering of files or/and fractional cascading if:
         // (1) not all the files are in level 0, or
-        // (2) there are more than 3 Level 0 files
-        // If there are only 3 or less level 0 files in the system, we skip
+        // (2) there are more than 3 current level files
+        // If there are only 3 or less current level files in the system, we skip
         // the key range filtering. In this case, more likely, the system is
         // highly tuned to minimize number of tables queried by each query,
         // so it is unlikely that key range filtering is more efficient than
@@ -2637,7 +2637,7 @@ Status VersionSet::Recover(
   {
     unique_ptr<SequentialFile> manifest_file;
     s = env_->NewSequentialFile(manifest_filename, &manifest_file,
-                                env_options_);
+                                env_->OptimizeForManifestRead(env_options_));
     if (!s.ok()) {
       return s;
     }
@@ -3064,7 +3064,8 @@ Status VersionSet::DumpManifest(Options& options, std::string& dscname,
   Status s;
   {
     unique_ptr<SequentialFile> file;
-    s = options.env->NewSequentialFile(dscname, &file, env_options_);
+    s = options.env->NewSequentialFile(
+        dscname, &file, env_->OptimizeForManifestRead(env_options_));
     if (!s.ok()) {
       return s;
     }

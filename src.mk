@@ -160,6 +160,7 @@ LIB_SOURCES =                                                   \
   utilities/compaction_filters/remove_emptyvalue_compactionfilter.cc    \
   utilities/convenience/info_log_finder.cc                      \
   utilities/date_tiered/date_tiered_db_impl.cc                  \
+  utilities/debug.cc                                        	\
   utilities/document/document_db.cc                             \
   utilities/document/json_document.cc                           \
   utilities/document/json_document_builder.cc                   \
@@ -201,6 +202,7 @@ TOOL_LIB_SOURCES = \
   tools/ldb_cmd.cc                                               \
   tools/ldb_tool.cc                                              \
   tools/sst_dump_tool.cc                                         \
+  utilities/blob_db/blob_dump_tool.cc                            \
 
 MOCK_LIB_SOURCES = \
   env/mock_env.cc \
@@ -355,7 +357,7 @@ JNI_NATIVE_SOURCES =                                          \
   java/rocksjni/compression_options.cc                        \
   java/rocksjni/env.cc                                        \
   java/rocksjni/env_options.cc                                \
-  java/rocksjni/external_sst_file_info.cc                     \
+  java/rocksjni/ingest_external_file_options.cc               \
   java/rocksjni/filter.cc                                     \
   java/rocksjni/iterator.cc                                   \
   java/rocksjni/loggerjnicallback.cc                          \
