@@ -382,6 +382,11 @@ class Repairer {
       ScopedArenaIterator iter(mem->NewIterator(ro, &arena));
       EnvOptions optimized_env_options =
           env_->OptimizeForCompactionTableWrite(env_options_, immutable_db_options_);
+
+      int64_t _current_time = 0;
+      status = env_->GetCurrentTime(&_current_time);  // ignore error
+      const uint64_t current_time = static_cast<uint64_t>(_current_time);
+
       status = BuildTable(
           dbname_, env_, *cfd->ioptions(), *cfd->GetLatestMutableCFOptions(),
           optimized_env_options, table_cache_, iter.get(),
@@ -389,7 +394,9 @@ class Repairer {
           &meta, cfd->internal_comparator(),
           cfd->int_tbl_prop_collector_factories(), cfd->GetID(), cfd->GetName(),
           {}, kMaxSequenceNumber, kNoCompression, CompressionOptions(), false,
-          nullptr /* internal_stats */, TableFileCreationReason::kRecovery);
+          nullptr /* internal_stats */, TableFileCreationReason::kRecovery,
+          nullptr /* event_logger */, 0 /* job_id */, Env::IO_HIGH,
+          nullptr /* table_properties */, -1 /* level */, current_time);
       ROCKS_LOG_INFO(db_options_.info_log,
                      "Log #%" PRIu64 ": %d ops saved to Table #%" PRIu64 " %s",
                      log, counter, meta.fd.GetNumber(),
@@ -524,6 +531,7 @@ class Repairer {
         max_sequence = tables_[i].max_sequence;
       }
     }
+    vset_.SetLastToBeWrittenSequence(max_sequence);
     vset_.SetLastSequence(max_sequence);
 
     for (const auto& cf_id_and_tables : cf_id_to_tables) {

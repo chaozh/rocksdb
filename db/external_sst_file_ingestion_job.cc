@@ -146,6 +146,8 @@ Status ExternalSstFileIngestionJob::NeedsFlush(bool* flush_needed) {
   return status;
 }
 
+// REQUIRES: we have become the only writer by entering both write_thread_ and
+// nonmem_write_thread_
 Status ExternalSstFileIngestionJob::Run() {
   Status status;
 #ifndef NDEBUG
@@ -164,6 +166,8 @@ Status ExternalSstFileIngestionJob::Run() {
     // if the dont overlap with any ranges since we have snapshots
     force_global_seqno = true;
   }
+  // It is safe to use this instead of LastToBeWrittenSequence since we are
+  // the only active writer, and hence they are equal
   const SequenceNumber last_seqno = versions_->LastSequence();
   SuperVersion* super_version = cfd_->GetSuperVersion();
   edit_.SetColumnFamily(cfd_->GetID());
@@ -197,6 +201,7 @@ Status ExternalSstFileIngestionJob::Run() {
   }
 
   if (consumed_seqno) {
+    versions_->SetLastToBeWrittenSequence(last_seqno + 1);
     versions_->SetLastSequence(last_seqno + 1);
   }
 
@@ -281,7 +286,8 @@ Status ExternalSstFileIngestionJob::GetIngestedFileInfo(
   if (!status.ok()) {
     return status;
   }
-  sst_file_reader.reset(new RandomAccessFileReader(std::move(sst_file)));
+  sst_file_reader.reset(new RandomAccessFileReader(std::move(sst_file),
+                                                   external_file));
 
   status = cfd_->ioptions()->table_factory->NewTableReader(
       TableReaderOptions(*cfd_->ioptions(), env_options_,
@@ -381,11 +387,27 @@ Status ExternalSstFileIngestionJob::IngestedFilesOverlapWithMemtables(
   sv->imm->AddIterators(ro, &merge_iter_builder);
   ScopedArenaIterator memtable_iter(merge_iter_builder.Finish());
 
+  std::vector<InternalIterator*> memtable_range_del_iters;
+  auto* active_range_del_iter = sv->mem->NewRangeTombstoneIterator(ro);
+  if (active_range_del_iter != nullptr) {
+    memtable_range_del_iters.push_back(active_range_del_iter);
+  }
+  sv->imm->AddRangeTombstoneIterators(ro, &memtable_range_del_iters);
+  std::unique_ptr<InternalIterator> memtable_range_del_iter(NewMergingIterator(
+      &cfd_->internal_comparator(),
+      memtable_range_del_iters.empty() ? nullptr : &memtable_range_del_iters[0],
+      static_cast<int>(memtable_range_del_iters.size())));
+
   Status status;
   *overlap = false;
   for (IngestedFileInfo& f : files_to_ingest_) {
     status =
         IngestedFileOverlapWithIteratorRange(&f, memtable_iter.get(), overlap);
+    if (!status.ok() || *overlap == true) {
+      break;
+    }
+    status = IngestedFileOverlapWithRangeDeletions(
+        &f, memtable_range_del_iter.get(), overlap);
     if (!status.ok() || *overlap == true) {
       break;
     }
@@ -555,6 +577,34 @@ Status ExternalSstFileIngestionJob::IngestedFileOverlapWithIteratorRange(
   return iter->status();
 }
 
+Status ExternalSstFileIngestionJob::IngestedFileOverlapWithRangeDeletions(
+    const IngestedFileInfo* file_to_ingest, InternalIterator* range_del_iter,
+    bool* overlap) {
+  auto* vstorage = cfd_->current()->storage_info();
+  auto* ucmp = vstorage->InternalComparator()->user_comparator();
+
+  *overlap = false;
+  if (range_del_iter != nullptr) {
+    for (range_del_iter->SeekToFirst(); range_del_iter->Valid();
+         range_del_iter->Next()) {
+      ParsedInternalKey parsed_key;
+      if (!ParseInternalKey(range_del_iter->key(), &parsed_key)) {
+        return Status::Corruption("corrupted range deletion key: " +
+                                  range_del_iter->key().ToString());
+      }
+      RangeTombstone range_del(parsed_key, range_del_iter->value());
+      if (ucmp->Compare(range_del.start_key_,
+                        file_to_ingest->largest_user_key) <= 0 &&
+          ucmp->Compare(file_to_ingest->smallest_user_key,
+                        range_del.end_key_) <= 0) {
+        *overlap = true;
+        break;
+      }
+    }
+  }
+  return Status::OK();
+}
+
 bool ExternalSstFileIngestionJob::IngestedFileFitInLevel(
     const IngestedFileInfo* file_to_ingest, int level) {
   if (level == 0) {
@@ -591,17 +641,25 @@ Status ExternalSstFileIngestionJob::IngestedFileOverlapWithLevel(
   ro.total_order_seek = true;
   MergeIteratorBuilder merge_iter_builder(&cfd_->internal_comparator(),
                                           &arena);
-  RangeDelAggregator range_del_agg(cfd_->internal_comparator(),
-                                   {} /* snapshots */);
-  sv->current->AddIteratorsForLevel(ro, env_options_, &merge_iter_builder,
-                                    lvl, &range_del_agg);
-  if (!range_del_agg.IsEmpty()) {
-    return Status::NotSupported(
-        "file ingestion with range tombstones is currently unsupported");
-  }
+  sv->current->AddIteratorsForLevel(ro, env_options_, &merge_iter_builder, lvl,
+                                    nullptr /* range_del_agg */);
   ScopedArenaIterator level_iter(merge_iter_builder.Finish());
-  return IngestedFileOverlapWithIteratorRange(
+
+  std::vector<InternalIterator*> level_range_del_iters;
+  sv->current->AddRangeDelIteratorsForLevel(ro, env_options_, lvl,
+                                            &level_range_del_iters);
+  std::unique_ptr<InternalIterator> level_range_del_iter(NewMergingIterator(
+      &cfd_->internal_comparator(),
+      level_range_del_iters.empty() ? nullptr : &level_range_del_iters[0],
+      static_cast<int>(level_range_del_iters.size())));
+
+  Status status = IngestedFileOverlapWithIteratorRange(
       file_to_ingest, level_iter.get(), overlap_with_level);
+  if (status.ok() && *overlap_with_level == false) {
+    status = IngestedFileOverlapWithRangeDeletions(
+        file_to_ingest, level_range_del_iter.get(), overlap_with_level);
+  }
+  return status;
 }
 
 }  // namespace rocksdb

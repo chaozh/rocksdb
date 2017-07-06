@@ -1025,7 +1025,6 @@ Status CompactionJob::FinishCompactionOutputFile(
   uint64_t output_number = sub_compact->current_output()->meta.fd.GetNumber();
   assert(output_number != 0);
 
-  TableProperties table_properties;
   // Check for iterator errors
   Status s = input_status;
   auto meta = &sub_compact->current_output()->meta;
@@ -1081,6 +1080,23 @@ Status CompactionJob::FinishCompactionOutputFile(
   }
   sub_compact->outfile.reset();
 
+  if (s.ok() && current_entries == 0) {
+    // If there is nothing to output, no necessary to generate a sst file.
+    // This happens when the output level is bottom level, at the same time
+    // the sub_compact output nothing.
+    std::string fname = TableFileName(
+        db_options_.db_paths, meta->fd.GetNumber(), meta->fd.GetPathId());
+    env_->DeleteFile(fname);
+
+    // Also need to remove the file from outputs, or it will be added to the
+    // VersionEdit.
+    assert(!sub_compact->outputs.empty());
+    sub_compact->outputs.pop_back();
+    sub_compact->builder.reset();
+    sub_compact->current_output_file_size = 0;
+    return s;
+  }
+
   ColumnFamilyData* cfd = sub_compact->compaction->column_family_data();
   TableProperties tp;
   if (s.ok() && current_entries > 0) {
@@ -1133,12 +1149,22 @@ Status CompactionJob::FinishCompactionOutputFile(
                             meta->fd.GetPathId());
     sfm->OnAddFile(fn);
     if (sfm->IsMaxAllowedSpaceReached()) {
+      // TODO(ajkr): should we return OK() if max space was reached by the final
+      // compaction output file (similarly to how flush works when full)?
+      s = Status::IOError("Max allowed space was reached");
+      TEST_SYNC_POINT(
+          "CompactionJob::FinishCompactionOutputFile:"
+          "MaxAllowedSpaceReached");
       InstrumentedMutexLock l(db_mutex_);
       if (db_bg_error_->ok()) {
-        s = Status::IOError("Max allowed space was reached");
-        *db_bg_error_ = s;
-        TEST_SYNC_POINT(
-            "CompactionJob::FinishCompactionOutputFile:MaxAllowedSpaceReached");
+        Status new_bg_error = s;
+        // may temporarily unlock and lock the mutex.
+        EventHelpers::NotifyOnBackgroundError(
+            cfd->ioptions()->listeners, BackgroundErrorReason::kCompaction,
+            &new_bg_error, db_mutex_);
+        if (!new_bg_error.ok()) {
+          *db_bg_error_ = new_bg_error;
+        }
       }
     }
   }
@@ -1253,14 +1279,22 @@ Status CompactionJob::OpenCompactionOutputFile(
   // data is going to be found
   bool skip_filters =
       cfd->ioptions()->optimize_filters_for_hits && bottommost_level_;
+
+  uint64_t output_file_creation_time =
+      sub_compact->compaction->MaxInputFileCreationTime();
+  if (output_file_creation_time == 0) {
+    int64_t _current_time = 0;
+    db_options_.env->GetCurrentTime(&_current_time);  // ignore error
+    output_file_creation_time = static_cast<uint64_t>(_current_time);
+  }
+
   sub_compact->builder.reset(NewTableBuilder(
       *cfd->ioptions(), cfd->internal_comparator(),
       cfd->int_tbl_prop_collector_factories(), cfd->GetID(), cfd->GetName(),
       sub_compact->outfile.get(), sub_compact->compaction->output_compression(),
       cfd->ioptions()->compression_opts,
-      sub_compact->compaction->output_level(),
-      &sub_compact->compression_dict,
-      skip_filters));
+      sub_compact->compaction->output_level(), &sub_compact->compression_dict,
+      skip_filters, output_file_creation_time));
   LogFlush(db_options_.info_log);
   return s;
 }

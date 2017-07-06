@@ -57,7 +57,8 @@ Status GetMutableDBOptionsFromStrings(
 Status GetTableFactoryFromMap(
     const std::string& factory_name,
     const std::unordered_map<std::string, std::string>& opt_map,
-    std::shared_ptr<TableFactory>* table_factory);
+    std::shared_ptr<TableFactory>* table_factory,
+    bool ignore_unknown_options = false);
 
 Status GetStringFromTableFactory(std::string* opts_str, const TableFactory* tf,
                                  const std::string& delimiter = ";  ");
@@ -129,7 +130,8 @@ Status GetDBOptionsFromMapInternal(
     const DBOptions& base_options,
     const std::unordered_map<std::string, std::string>& opts_map,
     DBOptions* new_options, bool input_strings_escaped,
-    std::vector<std::string>* unsupported_options_names = nullptr);
+    std::vector<std::string>* unsupported_options_names = nullptr,
+    bool ignore_unknown_options = false);
 
 // In addition to its public version defined in rocksdb/convenience.h,
 // this further takes an optional output vector "unsupported_options_names",
@@ -138,7 +140,8 @@ Status GetColumnFamilyOptionsFromMapInternal(
     const ColumnFamilyOptions& base_options,
     const std::unordered_map<std::string, std::string>& opts_map,
     ColumnFamilyOptions* new_options, bool input_strings_escaped,
-    std::vector<std::string>* unsupported_options_names = nullptr);
+    std::vector<std::string>* unsupported_options_names = nullptr,
+    bool ignore_unknown_options = false);
 
 static std::unordered_map<std::string, OptionTypeInfo> db_options_type_info = {
     /*
@@ -344,9 +347,17 @@ static std::unordered_map<std::string, OptionTypeInfo> db_options_type_info = {
       OptionType::kBoolean, OptionVerificationType::kNormal, true,
       offsetof(struct MutableDBOptions, avoid_flush_during_shutdown)}},
     {"allow_ingest_behind",
-     {offsetof(struct DBOptions, allow_ingest_behind),
-      OptionType::kBoolean, OptionVerificationType::kNormal, false,
-      offsetof(struct ImmutableDBOptions, allow_ingest_behind)}}};
+     {offsetof(struct DBOptions, allow_ingest_behind), OptionType::kBoolean,
+      OptionVerificationType::kNormal, false,
+      offsetof(struct ImmutableDBOptions, allow_ingest_behind)}},
+    {"concurrent_prepare",
+     {offsetof(struct DBOptions, concurrent_prepare), OptionType::kBoolean,
+      OptionVerificationType::kNormal, false,
+      offsetof(struct ImmutableDBOptions, concurrent_prepare)}},
+    {"manual_wal_flush",
+     {offsetof(struct DBOptions, manual_wal_flush), OptionType::kBoolean,
+      OptionVerificationType::kNormal, false,
+      offsetof(struct ImmutableDBOptions, manual_wal_flush)}}};
 
 // offset_of is used to get the offset of a class data member
 // ex: offset_of(&ColumnFamilyOptions::num_levels)

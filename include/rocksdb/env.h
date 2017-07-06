@@ -173,8 +173,7 @@ class Env {
   virtual Status ReopenWritableFile(const std::string& fname,
                                     unique_ptr<WritableFile>* result,
                                     const EnvOptions& options) {
-    Status s;
-    return s;
+    return Status::NotSupported();
   }
 
   // Reuse an existing file by renaming it and opening it as writable.
@@ -354,6 +353,7 @@ class Env {
   virtual Status GetHostName(char* name, uint64_t len) = 0;
 
   // Get the number of seconds since the Epoch, 1970-01-01 00:00:00 (UTC).
+  // Only overwrites *unix_time on success.
   virtual Status GetCurrentTime(int64_t* unix_time) = 0;
 
   // Get full directory name for this db.
@@ -901,7 +901,7 @@ class EnvWrapper : public Env {
  public:
   // Initialize an EnvWrapper that delegates all calls to *t
   explicit EnvWrapper(Env* t) : target_(t) { }
-  virtual ~EnvWrapper();
+  ~EnvWrapper() override;
 
   // Return the target to which this Env forwards all calls
   Env* target() const { return target_; }
@@ -936,8 +936,8 @@ class EnvWrapper : public Env {
                          const EnvOptions& options) override {
     return target_->NewRandomRWFile(fname, result, options);
   }
-  virtual Status NewDirectory(const std::string& name,
-                              unique_ptr<Directory>* result) override {
+  Status NewDirectory(const std::string& name,
+                      unique_ptr<Directory>* result) override {
     return target_->NewDirectory(name, result);
   }
   Status FileExists(const std::string& f) override {
@@ -999,15 +999,14 @@ class EnvWrapper : public Env {
     return target_->StartThread(f, a);
   }
   void WaitForJoin() override { return target_->WaitForJoin(); }
-  virtual unsigned int GetThreadPoolQueueLen(
-      Priority pri = LOW) const override {
+  unsigned int GetThreadPoolQueueLen(Priority pri = LOW) const override {
     return target_->GetThreadPoolQueueLen(pri);
   }
-  virtual Status GetTestDirectory(std::string* path) override {
+  Status GetTestDirectory(std::string* path) override {
     return target_->GetTestDirectory(path);
   }
-  virtual Status NewLogger(const std::string& fname,
-                           shared_ptr<Logger>* result) override {
+  Status NewLogger(const std::string& fname,
+                   shared_ptr<Logger>* result) override {
     return target_->NewLogger(fname, result);
   }
   uint64_t NowMicros() override { return target_->NowMicros(); }
@@ -1056,6 +1055,10 @@ class EnvWrapper : public Env {
     return target_->GetThreadID();
   }
 
+  std::string GenerateUniqueId() override {
+    return target_->GenerateUniqueId();
+  }
+
  private:
   Env* target_;
 };
@@ -1095,10 +1098,10 @@ class WritableFileWrapper : public WritableFile {
     return target_->InvalidateCache(offset, length);
   }
 
-  virtual void SetPreallocationBlockSize(size_t size) override {
+  void SetPreallocationBlockSize(size_t size) override {
     target_->SetPreallocationBlockSize(size);
   }
-  virtual void PrepareWrite(size_t offset, size_t len) override {
+  void PrepareWrite(size_t offset, size_t len) override {
     target_->PrepareWrite(offset, len);
   }
 

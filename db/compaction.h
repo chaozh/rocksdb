@@ -101,7 +101,8 @@ class Compaction {
   // input level.
   // REQUIREMENT: "compaction_input_level" must be >= 0 and
   //              < "input_levels()"
-  const std::vector<FileMetaData*>* inputs(size_t compaction_input_level) {
+  const std::vector<FileMetaData*>* inputs(
+      size_t compaction_input_level) const {
     assert(compaction_input_level < inputs_.size());
     return &inputs_[compaction_input_level].files;
   }
@@ -241,6 +242,8 @@ class Compaction {
   }
 
   uint64_t max_compaction_bytes() const { return max_compaction_bytes_; }
+
+  uint64_t MaxInputFileCreationTime() const;
 
  private:
   // mark (or clear) all files that are being compacted

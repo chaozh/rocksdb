@@ -562,7 +562,7 @@ void DBIter::MergeValuesNewToOld() {
       const Slice val = iter_->value();
       s = MergeHelper::TimedFullMerge(
           merge_operator_, ikey.user_key, &val, merge_context_.GetOperands(),
-          &saved_value_, logger_, statistics_, env_, &pinned_value_);
+          &saved_value_, logger_, statistics_, env_, &pinned_value_, true);
       if (!s.ok()) {
         status_ = s;
       }
@@ -587,7 +587,7 @@ void DBIter::MergeValuesNewToOld() {
   s = MergeHelper::TimedFullMerge(merge_operator_, saved_key_.GetUserKey(),
                                   nullptr, merge_context_.GetOperands(),
                                   &saved_value_, logger_, statistics_, env_,
-                                  &pinned_value_);
+                                  &pinned_value_, true);
   if (!s.ok()) {
     status_ = s;
   }
@@ -644,6 +644,7 @@ void DBIter::ReverseToBackward() {
     while (iter_->Valid() &&
            user_comparator_->Compare(ikey.user_key, saved_key_.GetUserKey()) >
                0) {
+      assert(ikey.sequence != kMaxSequenceNumber);
       if (ikey.sequence > sequence_) {
         PERF_COUNTER_ADD(internal_recent_skipped_count, 1);
       } else {
@@ -806,13 +807,13 @@ bool DBIter::FindValueForCurrentKey() {
         s = MergeHelper::TimedFullMerge(
             merge_operator_, saved_key_.GetUserKey(), nullptr,
             merge_context_.GetOperands(), &saved_value_, logger_, statistics_,
-            env_, &pinned_value_);
+            env_, &pinned_value_, true);
       } else {
         assert(last_not_merge_type == kTypeValue);
         s = MergeHelper::TimedFullMerge(
             merge_operator_, saved_key_.GetUserKey(), &pinned_value_,
             merge_context_.GetOperands(), &saved_value_, logger_, statistics_,
-            env_, &pinned_value_);
+            env_, &pinned_value_, true);
       }
       break;
     case kTypeValue:
@@ -884,7 +885,7 @@ bool DBIter::FindValueForCurrentKeyUsingSeek() {
     s = MergeHelper::TimedFullMerge(merge_operator_, saved_key_.GetUserKey(),
                                     nullptr, merge_context_.GetOperands(),
                                     &saved_value_, logger_, statistics_, env_,
-                                    &pinned_value_);
+                                    &pinned_value_, true);
     // Make iter_ valid and point to saved_key_
     if (!iter_->Valid() ||
         !user_comparator_->Equal(ikey.user_key, saved_key_.GetUserKey())) {
@@ -902,7 +903,7 @@ bool DBIter::FindValueForCurrentKeyUsingSeek() {
   s = MergeHelper::TimedFullMerge(merge_operator_, saved_key_.GetUserKey(),
                                   &val, merge_context_.GetOperands(),
                                   &saved_value_, logger_, statistics_, env_,
-                                  &pinned_value_);
+                                  &pinned_value_, true);
   valid_ = true;
   if (!s.ok()) {
     status_ = s;
@@ -956,6 +957,7 @@ void DBIter::FindPrevUserKey() {
         ++num_skipped;
       }
     }
+    assert(ikey.sequence != kMaxSequenceNumber);
     if (ikey.sequence > sequence_) {
       PERF_COUNTER_ADD(internal_recent_skipped_count, 1);
     } else {

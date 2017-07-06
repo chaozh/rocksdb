@@ -9,6 +9,7 @@
 
 #include "db/db_test_util.h"
 #include "db/forward_iterator.h"
+#include "rocksdb/env_encryption.h"
 
 namespace rocksdb {
 
@@ -42,10 +43,13 @@ SpecialEnv::SpecialEnv(Env* base)
   table_write_callback_ = nullptr;
 }
 
+ROT13BlockCipher rot13Cipher_(16);
+
 DBTestBase::DBTestBase(const std::string path)
-    : option_config_(kDefault),
-      mem_env_(!getenv("MEM_ENV") ? nullptr : new MockEnv(Env::Default())),
-      env_(new SpecialEnv(mem_env_ ? mem_env_ : Env::Default())) {
+    : mem_env_(!getenv("MEM_ENV") ? nullptr : new MockEnv(Env::Default())),
+      encrypted_env_(!getenv("ENCRYPTED_ENV") ? nullptr : NewEncryptedEnv(mem_env_ ? mem_env_ : Env::Default(), new CTREncryptionProvider(rot13Cipher_))),
+      env_(new SpecialEnv(encrypted_env_ ? encrypted_env_ : (mem_env_ ? mem_env_ : Env::Default()))),
+      option_config_(kDefault) {
   env_->SetBackgroundThreads(1, Env::LOW);
   env_->SetBackgroundThreads(1, Env::HIGH);
   dbname_ = test::TmpDir(env_) + path;
@@ -245,7 +249,17 @@ bool DBTestBase::ChangeFilterOptions() {
 
 // Return the current option configuration.
 Options DBTestBase::CurrentOptions(
-    const anon::OptionsOverride& options_override) {
+    const anon::OptionsOverride& options_override) const {
+  return GetOptions(option_config_, GetDefaultOptions(), options_override);
+}
+
+Options DBTestBase::CurrentOptions(
+    const Options& default_options,
+    const anon::OptionsOverride& options_override) const {
+  return GetOptions(option_config_, default_options, options_override);
+}
+
+Options DBTestBase::GetDefaultOptions() {
   Options options;
   options.write_buffer_size = 4090 * 4096;
   options.target_file_size_base = 2 * 1024 * 1024;
@@ -253,15 +267,14 @@ Options DBTestBase::CurrentOptions(
   options.max_open_files = 5000;
   options.wal_recovery_mode = WALRecoveryMode::kTolerateCorruptedTailRecords;
   options.compaction_pri = CompactionPri::kByCompensatedSize;
-
-  return CurrentOptions(options, options_override);
+  return options;
 }
 
-Options DBTestBase::CurrentOptions(
-    const Options& defaultOptions,
-    const anon::OptionsOverride& options_override) {
+Options DBTestBase::GetOptions(
+    int option_config, const Options& default_options,
+    const anon::OptionsOverride& options_override) const {
   // this redundant copy is to minimize code change w/o having lint error.
-  Options options = defaultOptions;
+  Options options = default_options;
   BlockBasedTableOptions table_options;
   bool set_block_based_table_factory = true;
 #if !defined(OS_MACOSX) && !defined(OS_WIN) && !defined(OS_SOLARIS) &&  \
@@ -272,7 +285,8 @@ Options DBTestBase::CurrentOptions(
       "NewWritableFile:O_DIRECT");
 #endif
 
-  switch (option_config_) {
+  bool can_allow_mmap = IsMemoryMappedAccessSupported();
+  switch (option_config) {
 #ifndef ROCKSDB_LITE
     case kHashSkipList:
       options.prefix_extractor.reset(NewFixedPrefixTransform(1));
@@ -282,14 +296,14 @@ Options DBTestBase::CurrentOptions(
     case kPlainTableFirstBytePrefix:
       options.table_factory.reset(new PlainTableFactory());
       options.prefix_extractor.reset(NewFixedPrefixTransform(1));
-      options.allow_mmap_reads = true;
+      options.allow_mmap_reads = can_allow_mmap;
       options.max_sequential_skip_in_iterations = 999999;
       set_block_based_table_factory = false;
       break;
     case kPlainTableCappedPrefix:
       options.table_factory.reset(new PlainTableFactory());
       options.prefix_extractor.reset(NewCappedPrefixTransform(8));
-      options.allow_mmap_reads = true;
+      options.allow_mmap_reads = can_allow_mmap;
       options.max_sequential_skip_in_iterations = 999999;
       set_block_based_table_factory = false;
       break;
@@ -303,7 +317,7 @@ Options DBTestBase::CurrentOptions(
     case kPlainTableAllBytesPrefix:
       options.table_factory.reset(new PlainTableFactory());
       options.prefix_extractor.reset(NewNoopTransform());
-      options.allow_mmap_reads = true;
+      options.allow_mmap_reads = can_allow_mmap;
       options.max_sequential_skip_in_iterations = 999999;
       set_block_based_table_factory = false;
       break;
@@ -355,7 +369,7 @@ Options DBTestBase::CurrentOptions(
       options.wal_dir = alternative_wal_dir_;
       // mmap reads should be orthogonal to WalDir setting, so we piggyback to
       // this option config to test mmap reads as well
-      options.allow_mmap_reads = true;
+      options.allow_mmap_reads = can_allow_mmap;
       break;
     case kManifestFileSize:
       options.max_manifest_file_size = 50;  // 50 bytes
@@ -375,7 +389,7 @@ Options DBTestBase::CurrentOptions(
       options.num_levels = 8;
       break;
     case kCompressedBlockCache:
-      options.allow_mmap_writes = true;
+      options.allow_mmap_writes = can_allow_mmap;
       table_options.block_cache_compressed = NewLRUCache(8 * 1024 * 1024);
       break;
     case kInfiniteMaxOpenFiles:
@@ -454,6 +468,16 @@ Options DBTestBase::CurrentOptions(
           });
       rocksdb::SyncPoint::GetInstance()->EnableProcessing();
 #endif
+      break;
+    }
+    case kPipelinedWrite: {
+      options.enable_pipelined_write = true;
+      break;
+    }
+    case kConcurrentWALWrites: {
+      // This options optimize 2PC commit path
+      options.concurrent_prepare = true;
+      options.manual_wal_flush = true;
       break;
     }
 
@@ -577,6 +601,10 @@ bool DBTestBase::IsDirectIOSupported() {
     s = env_->DeleteFile(tmp);
   }
   return s.ok();
+}
+
+bool DBTestBase::IsMemoryMappedAccessSupported() const {
+  return (!encrypted_env_);
 }
 
 Status DBTestBase::Flush(int cf) {

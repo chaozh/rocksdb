@@ -91,7 +91,8 @@ Status TableCache::GetTableReader(
     const InternalKeyComparator& internal_comparator, const FileDescriptor& fd,
     bool sequential_mode, size_t readahead, bool record_read_stats,
     HistogramImpl* file_read_hist, unique_ptr<TableReader>* table_reader,
-    bool skip_filters, int level, bool prefetch_index_and_filter_in_cache) {
+    bool skip_filters, int level, bool prefetch_index_and_filter_in_cache,
+    bool for_compaction) {
   std::string fname =
       TableFileName(ioptions_.db_paths, fd.GetNumber(), fd.GetPathId());
   unique_ptr<RandomAccessFile> file;
@@ -107,9 +108,10 @@ Status TableCache::GetTableReader(
     }
     StopWatch sw(ioptions_.env, ioptions_.statistics, TABLE_OPEN_IO_MICROS);
     std::unique_ptr<RandomAccessFileReader> file_reader(
-        new RandomAccessFileReader(std::move(file), ioptions_.env,
+        new RandomAccessFileReader(std::move(file), fname, ioptions_.env,
                                    ioptions_.statistics, record_read_stats,
-                                   file_read_hist));
+                                   file_read_hist, ioptions_.rate_limiter,
+                                   for_compaction));
     s = ioptions_.table_factory->NewTableReader(
         TableReaderOptions(ioptions_, env_options, internal_comparator,
                            skip_filters, level),
@@ -205,7 +207,8 @@ InternalIterator* TableCache::NewIterator(
       s = GetTableReader(
           env_options, icomparator, fd, true /* sequential_mode */, readahead,
           !for_compaction /* record stats */, nullptr, &table_reader_unique_ptr,
-          false /* skip_filters */, level);
+          false /* skip_filters */, level,
+          true /* prefetch_index_and_filter_in_cache */, for_compaction);
       if (s.ok()) {
         table_reader = table_reader_unique_ptr.release();
       }
@@ -258,6 +261,44 @@ InternalIterator* TableCache::NewIterator(
   if (!s.ok()) {
     assert(result == nullptr);
     result = NewErrorInternalIterator(s, arena);
+  }
+  return result;
+}
+
+InternalIterator* TableCache::NewRangeTombstoneIterator(
+    const ReadOptions& options, const EnvOptions& env_options,
+    const InternalKeyComparator& icomparator, const FileDescriptor& fd,
+    HistogramImpl* file_read_hist, bool skip_filters, int level) {
+  Status s;
+  TableReader* table_reader = nullptr;
+  Cache::Handle* handle = nullptr;
+  table_reader = fd.table_reader;
+  if (table_reader == nullptr) {
+    s = FindTable(env_options, icomparator, fd, &handle,
+                  options.read_tier == kBlockCacheTier /* no_io */,
+                  true /* record read_stats */, file_read_hist, skip_filters,
+                  level);
+    if (s.ok()) {
+      table_reader = GetTableReaderFromHandle(handle);
+    }
+  }
+  InternalIterator* result = nullptr;
+  if (s.ok()) {
+    result = table_reader->NewRangeTombstoneIterator(options);
+    if (result != nullptr) {
+      if (handle != nullptr) {
+        result->RegisterCleanup(&UnrefEntry, cache_, handle);
+      }
+    }
+  }
+  if (result == nullptr && handle != nullptr) {
+    // the range deletion block didn't exist, or there was a failure between
+    // getting handle and getting iterator.
+    ReleaseHandle(handle);
+  }
+  if (!s.ok()) {
+    assert(result == nullptr);
+    result = NewErrorInternalIterator(s);
   }
   return result;
 }

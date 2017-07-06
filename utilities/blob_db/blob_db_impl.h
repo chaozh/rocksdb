@@ -189,12 +189,18 @@ class BlobDBImpl : public BlobDB {
 
   Status LinkToBaseDB(DB* db) override;
 
+  BlobDBOptions GetBlobDBOptions() const override;
+
   BlobDBImpl(DB* db, const BlobDBOptions& bdb_options);
 
   BlobDBImpl(const std::string& dbname, const BlobDBOptions& bdb_options,
              const DBOptions& db_options);
 
   ~BlobDBImpl();
+
+#ifndef NDEBUG
+  Status TEST_GetSequenceNumber(const Slice& key, SequenceNumber* sequence);
+#endif  //  !NDEBUG
 
  private:
   static bool ExtractTTLFromBlob(const Slice& value, Slice* newval,
@@ -203,7 +209,11 @@ class BlobDBImpl : public BlobDB {
   Status OpenPhase1();
 
   Status CommonGet(const ColumnFamilyData* cfd, const Slice& key,
-                   const std::string& index_entry, std::string* value);
+                   const std::string& index_entry, std::string* value,
+                   SequenceNumber* sequence = nullptr);
+
+  Slice GetCompressedSlice(const Slice& raw,
+                           std::string* compression_output) const;
 
   // Just before flush starts acting on memtable files,
   // this handler is called.

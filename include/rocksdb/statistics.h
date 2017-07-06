@@ -21,6 +21,7 @@ namespace rocksdb {
  * Keep adding ticker's here.
  *  1. Any ticker should be added before TICKER_ENUM_MAX.
  *  2. Add a readable string in TickersNameMap below for the newly added ticker.
+ *  3. Add a corresponding enum value to TickerType.java in the java API
  */
 enum Tickers : uint32_t {
   // total block cache misses
@@ -332,6 +333,7 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
  * Add a new Histogram by assigning it the current value of HISTOGRAM_ENUM_MAX
  * Add a string representation in HistogramsNameMap below
  * And increment HISTOGRAM_ENUM_MAX
+ * Add a corresponding enum value to HistogramType.java in the java API
  */
 enum Histograms : uint32_t {
   DB_GET = 0,
@@ -370,6 +372,9 @@ enum Histograms : uint32_t {
   BYTES_DECOMPRESSED,
   COMPRESSION_TIMES_NANOS,
   DECOMPRESSION_TIMES_NANOS,
+  // Number of merge operands passed to the merge operator in user read
+  // requests.
+  READ_NUM_MERGE_OPERANDS,
 
   HISTOGRAM_ENUM_MAX,  // TODO(ldemailly): enforce HistogramsNameMap match
 };
@@ -405,6 +410,7 @@ const std::vector<std::pair<Histograms, std::string>> HistogramsNameMap = {
     {BYTES_DECOMPRESSED, "rocksdb.bytes.decompressed"},
     {COMPRESSION_TIMES_NANOS, "rocksdb.compression.times.nanos"},
     {DECOMPRESSION_TIMES_NANOS, "rocksdb.decompression.times.nanos"},
+    {READ_NUM_MERGE_OPERANDS, "rocksdb.read.num.merge_operands"},
 };
 
 struct HistogramData {

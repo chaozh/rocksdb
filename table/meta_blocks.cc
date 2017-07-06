@@ -67,12 +67,17 @@ void PropertyBlockBuilder::AddTableProperty(const TableProperties& props) {
   Add(TablePropertiesNames::kRawValueSize, props.raw_value_size);
   Add(TablePropertiesNames::kDataSize, props.data_size);
   Add(TablePropertiesNames::kIndexSize, props.index_size);
+  if (props.index_partitions != 0) {
+    Add(TablePropertiesNames::kIndexPartitions, props.index_partitions);
+    Add(TablePropertiesNames::kTopLevelIndexSize, props.top_level_index_size);
+  }
   Add(TablePropertiesNames::kNumEntries, props.num_entries);
   Add(TablePropertiesNames::kNumDataBlocks, props.num_data_blocks);
   Add(TablePropertiesNames::kFilterSize, props.filter_size);
   Add(TablePropertiesNames::kFormatVersion, props.format_version);
   Add(TablePropertiesNames::kFixedKeyLen, props.fixed_key_len);
   Add(TablePropertiesNames::kColumnFamilyId, props.column_family_id);
+  Add(TablePropertiesNames::kCreationTime, props.creation_time);
 
   if (!props.filter_policy_name.empty()) {
     Add(TablePropertiesNames::kFilterPolicy, props.filter_policy_name);
@@ -187,6 +192,10 @@ Status ReadProperties(const Slice& handle_value, RandomAccessFileReader* file,
   std::unordered_map<std::string, uint64_t*> predefined_uint64_properties = {
       {TablePropertiesNames::kDataSize, &new_table_properties->data_size},
       {TablePropertiesNames::kIndexSize, &new_table_properties->index_size},
+      {TablePropertiesNames::kIndexPartitions,
+       &new_table_properties->index_partitions},
+      {TablePropertiesNames::kTopLevelIndexSize,
+       &new_table_properties->top_level_index_size},
       {TablePropertiesNames::kFilterSize, &new_table_properties->filter_size},
       {TablePropertiesNames::kRawKeySize, &new_table_properties->raw_key_size},
       {TablePropertiesNames::kRawValueSize,
@@ -200,6 +209,8 @@ Status ReadProperties(const Slice& handle_value, RandomAccessFileReader* file,
        &new_table_properties->fixed_key_len},
       {TablePropertiesNames::kColumnFamilyId,
        &new_table_properties->column_family_id},
+      {TablePropertiesNames::kCreationTime,
+       &new_table_properties->creation_time},
   };
 
   std::string last_key;

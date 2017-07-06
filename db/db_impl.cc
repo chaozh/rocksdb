@@ -18,9 +18,6 @@
 #ifdef OS_SOLARIS
 #include <alloca.h>
 #endif
-#ifdef ROCKSDB_JEMALLOC
-#include "jemalloc/jemalloc.h"
-#endif
 
 #include <algorithm>
 #include <climits>
@@ -46,6 +43,7 @@
 #include "db/job_context.h"
 #include "db/log_reader.h"
 #include "db/log_writer.h"
+#include "db/malloc_stats.h"
 #include "db/managed_iterator.h"
 #include "db/memtable.h"
 #include "db/memtable_list.h"
@@ -136,6 +134,8 @@ void DumpSupportInfo(Logger* logger) {
   ROCKS_LOG_HEADER(logger, "Fast CRC32 supported: %d",
                    crc32c::IsFastCrc32Supported());
 }
+
+int64_t kDefaultLowPriThrottledRate = 2 * 1024 * 1024;
 } // namespace
 
 DBImpl::DBImpl(const DBOptions& options, const std::string& dbname)
@@ -160,7 +160,13 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname)
       is_snapshot_supported_(true),
       write_buffer_manager_(immutable_db_options_.write_buffer_manager.get()),
       write_thread_(immutable_db_options_),
+      nonmem_write_thread_(immutable_db_options_),
       write_controller_(mutable_db_options_.delayed_write_rate),
+      // Use delayed_write_rate as a base line to determine the initial
+      // low pri write rate limit. It may be adjusted later.
+      low_pri_write_rate_limiter_(NewGenericRateLimiter(std::min(
+          static_cast<int64_t>(mutable_db_options_.delayed_write_rate / 8),
+          kDefaultLowPriThrottledRate))),
       last_batch_group_size_(0),
       unscheduled_flushes_(0),
       unscheduled_compactions_(0),
@@ -184,7 +190,9 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname)
       bg_work_paused_(0),
       bg_compaction_paused_(0),
       refitting_level_(false),
-      opened_successfully_(false) {
+      opened_successfully_(false),
+      concurrent_prepare_(options.concurrent_prepare),
+      manual_wal_flush_(options.manual_wal_flush) {
   env_->GetAbsolutePath(dbname, &db_absolute_path_);
 
   // Reserve ten files or so for other uses and give the rest to TableCache.
@@ -219,7 +227,7 @@ void DBImpl::CancelAllBackgroundWork(bool wait) {
       has_unpersisted_data_.load(std::memory_order_relaxed) &&
       !mutable_db_options_.avoid_flush_during_shutdown) {
     for (auto cfd : *versions_->GetColumnFamilySet()) {
-      if (!cfd->IsDropped() && !cfd->mem()->IsEmpty()) {
+      if (!cfd->IsDropped() && cfd->initialized() && !cfd->mem()->IsEmpty()) {
         cfd->Ref();
         mutex_.Unlock();
         FlushMemTable(cfd, FlushOptions());
@@ -370,39 +378,6 @@ void DBImpl::PrintStatistics() {
   }
 }
 
-#ifndef ROCKSDB_LITE
-#ifdef ROCKSDB_JEMALLOC
-typedef struct {
-  char* cur;
-  char* end;
-} MallocStatus;
-
-static void GetJemallocStatus(void* mstat_arg, const char* status) {
-  MallocStatus* mstat = reinterpret_cast<MallocStatus*>(mstat_arg);
-  size_t status_len = status ? strlen(status) : 0;
-  size_t buf_size = (size_t)(mstat->end - mstat->cur);
-  if (!status_len || status_len > buf_size) {
-    return;
-  }
-
-  snprintf(mstat->cur, buf_size, "%s", status);
-  mstat->cur += status_len;
-}
-#endif  // ROCKSDB_JEMALLOC
-
-static void DumpMallocStats(std::string* stats) {
-#ifdef ROCKSDB_JEMALLOC
-  MallocStatus mstat;
-  const unsigned int kMallocStatusLen = 1000000;
-  std::unique_ptr<char[]> buf{new char[kMallocStatusLen + 1]};
-  mstat.cur = buf.get();
-  mstat.end = buf.get() + kMallocStatusLen;
-  je_malloc_stats_print(GetJemallocStatus, &mstat, "");
-  stats->append(buf.get());
-#endif  // ROCKSDB_JEMALLOC
-}
-#endif  // !ROCKSDB_LITE
-
 void DBImpl::MaybeDumpStats() {
   mutex_.Lock();
   unsigned int stats_dump_period_sec =
@@ -434,12 +409,17 @@ void DBImpl::MaybeDumpStats() {
       default_cf_internal_stats_->GetStringProperty(
           *db_property_info, DB::Properties::kDBStats, &stats);
       for (auto cfd : *versions_->GetColumnFamilySet()) {
-        cfd->internal_stats()->GetStringProperty(
-            *cf_property_info, DB::Properties::kCFStatsNoFileHistogram, &stats);
+        if (cfd->initialized()) {
+          cfd->internal_stats()->GetStringProperty(
+              *cf_property_info, DB::Properties::kCFStatsNoFileHistogram,
+              &stats);
+        }
       }
       for (auto cfd : *versions_->GetColumnFamilySet()) {
-        cfd->internal_stats()->GetStringProperty(
-            *cf_property_info, DB::Properties::kCFFileHistogram, &stats);
+        if (cfd->initialized()) {
+          cfd->internal_stats()->GetStringProperty(
+              *cf_property_info, DB::Properties::kCFFileHistogram, &stats);
+        }
       }
     }
     ROCKS_LOG_WARN(immutable_db_options_.info_log,
@@ -635,6 +615,26 @@ int DBImpl::FindMinimumEmptyLevelFitting(ColumnFamilyData* cfd,
   return minimum_level;
 }
 
+Status DBImpl::FlushWAL(bool sync) {
+  {
+    // We need to lock log_write_mutex_ since logs_ might change concurrently
+    InstrumentedMutexLock wl(&log_write_mutex_);
+    log::Writer* cur_log_writer = logs_.back().writer;
+    auto s = cur_log_writer->WriteBuffer();
+    if (!s.ok()) {
+      ROCKS_LOG_ERROR(immutable_db_options_.info_log, "WAL flush error %s",
+                      s.ToString().c_str());
+    }
+    if (!sync) {
+      ROCKS_LOG_DEBUG(immutable_db_options_.info_log, "FlushWAL sync=false");
+      return s;
+    }
+  }
+  // sync = true
+  ROCKS_LOG_DEBUG(immutable_db_options_.info_log, "FlushWAL sync=true");
+  return SyncWAL();
+}
+
 Status DBImpl::SyncWAL() {
   autovector<log::Writer*, 1> logs_to_sync;
   bool need_log_dir_sync;
@@ -673,6 +673,7 @@ Status DBImpl::SyncWAL() {
     need_log_dir_sync = !log_dir_synced_;
   }
 
+  TEST_SYNC_POINT("DBWALTest::SyncWALNotWaitWrite:1");
   RecordTick(stats_, WAL_FILE_SYNCED);
   Status status;
   for (log::Writer* log : logs_to_sync) {
@@ -684,6 +685,7 @@ Status DBImpl::SyncWAL() {
   if (status.ok() && need_log_dir_sync) {
     status = directories_.GetWalDir()->Fsync();
   }
+  TEST_SYNC_POINT("DBWALTest::SyncWALNotWaitWrite:2");
 
   TEST_SYNC_POINT("DBImpl::SyncWAL:BeforeMarkLogsSynced:1");
   {
@@ -1236,6 +1238,8 @@ Status DBImpl::CreateColumnFamilyImpl(const ColumnFamilyOptions& cf_options,
         is_snapshot_supported_ = false;
       }
 
+      cfd->set_initialized();
+
       *handle = new ColumnFamilyHandleImpl(cfd, this, &mutex_);
       ROCKS_LOG_INFO(immutable_db_options_.info_log,
                      "Created column family [%s] (ID %u)",
@@ -1737,7 +1741,9 @@ bool DBImpl::GetIntPropertyInternal(ColumnFamilyData* cfd,
 Status DBImpl::ResetStats() {
   InstrumentedMutexLock l(&mutex_);
   for (auto* cfd : *versions_->GetColumnFamilySet()) {
-    cfd->internal_stats()->Clear();
+    if (cfd->initialized()) {
+      cfd->internal_stats()->Clear();
+    }
   }
   return Status::OK();
 }
@@ -1756,6 +1762,9 @@ bool DBImpl::GetAggregatedIntProperty(const Slice& property,
     InstrumentedMutexLock l(&mutex_);
     uint64_t value;
     for (auto* cfd : *versions_->GetColumnFamilySet()) {
+      if (!cfd->initialized()) {
+        continue;
+      }
       if (GetIntPropertyInternal(cfd, *property_info, true, &value)) {
         sum += value;
       } else {
@@ -2348,6 +2357,9 @@ Status DBImpl::WriteOptionsFile(bool need_mutex_lock,
       BuildDBOptions(immutable_db_options_, mutable_db_options_);
   mutex_.Unlock();
 
+  TEST_SYNC_POINT("DBImpl::WriteOptionsFile:1");
+  TEST_SYNC_POINT("DBImpl::WriteOptionsFile:2");
+
   std::string file_name =
       TempOptionsFileName(GetName(), versions_->NewFileNumber());
   Status s =
@@ -2483,7 +2495,7 @@ void DBImpl::EraseThreadStatusDbInfo() const {
 // A global method that can dump out the build version
 void DumpRocksDBBuildVersion(Logger * log) {
 #if !defined(IOS_CROSS_COMPILE)
-  // if we compile with Xcode, we don't run build_detect_vesion, so we don't
+  // if we compile with Xcode, we don't run build_detect_version, so we don't
   // generate util/build_version.cc
   ROCKS_LOG_HEADER(log, "RocksDB version: %d.%d.%d\n", ROCKSDB_MAJOR,
                    ROCKSDB_MINOR, ROCKSDB_PATCH);
@@ -2647,9 +2659,13 @@ Status DBImpl::IngestExternalFile(
     InstrumentedMutexLock l(&mutex_);
     TEST_SYNC_POINT("DBImpl::AddFile:MutexLock");
 
-    // Stop writes to the DB
+    // Stop writes to the DB by entering both write threads
     WriteThread::Writer w;
     write_thread_.EnterUnbatched(&w, &mutex_);
+    WriteThread::Writer nonmem_w;
+    if (concurrent_prepare_) {
+      nonmem_write_thread_.EnterUnbatched(&nonmem_w, &mutex_);
+    }
 
     num_running_ingest_file_++;
 
@@ -2690,6 +2706,9 @@ Status DBImpl::IngestExternalFile(
     }
 
     // Resume writes to the DB
+    if (concurrent_prepare_) {
+      nonmem_write_thread_.ExitUnbatched(&nonmem_w);
+    }
     write_thread_.ExitUnbatched(&w);
 
     // Update stats

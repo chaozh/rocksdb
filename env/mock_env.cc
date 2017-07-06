@@ -148,7 +148,7 @@ class MemFile {
 
  private:
   uint64_t Now() {
-    int64_t unix_time;
+    int64_t unix_time = 0;
     auto s = env_->GetCurrentTime(&unix_time);
     assert(s.ok());
     return static_cast<uint64_t>(unix_time);
@@ -379,7 +379,9 @@ class TestMemLogger : public Logger {
       gettimeofday(&now_tv, nullptr);
       const time_t seconds = now_tv.tv_sec;
       struct tm t;
-      localtime_r(&seconds, &t);
+      memset(&t, 0, sizeof(t));
+      auto ret __attribute__((__unused__)) = localtime_r(&seconds, &t);
+      assert(ret);
       p += snprintf(p, limit - p,
                     "%04d/%02d/%02d-%02d:%02d:%02d.%06d ",
                     t.tm_year + 1900,
@@ -732,7 +734,9 @@ Status MockEnv::GetTestDirectory(std::string* path) {
 
 Status MockEnv::GetCurrentTime(int64_t* unix_time) {
   auto s = EnvWrapper::GetCurrentTime(unix_time);
-  *unix_time += fake_sleep_micros_.load() / (1000 * 1000);
+  if (s.ok()) {
+    *unix_time += fake_sleep_micros_.load() / (1000 * 1000);
+  }
   return s;
 }
 
@@ -781,5 +785,15 @@ std::string MockEnv::NormalizePath(const std::string path) {
 void MockEnv::FakeSleepForMicroseconds(int64_t micros) {
   fake_sleep_micros_.fetch_add(micros);
 }
+
+#ifndef ROCKSDB_LITE
+// This is to maintain the behavior before swithcing from InMemoryEnv to MockEnv
+Env* NewMemEnv(Env* base_env) { return new MockEnv(base_env); }
+
+#else  // ROCKSDB_LITE
+
+Env* NewMemEnv(Env* base_env) { return nullptr; }
+
+#endif  // !ROCKSDB_LITE
 
 }  // namespace rocksdb

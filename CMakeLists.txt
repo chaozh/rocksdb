@@ -358,6 +358,7 @@ set(SOURCES
         db/internal_stats.cc
         db/log_reader.cc
         db/log_writer.cc
+        db/malloc_stats.cc
         db/managed_iterator.cc
         db/memtable.cc
         db/memtable_list.cc
@@ -379,14 +380,16 @@ set(SOURCES
         db/write_thread.cc
         env/env.cc
         env/env_chroot.cc
+        env/env_encryption.cc
         env/env_hdfs.cc
-        env/memenv.cc
+        env/mock_env.cc
+        memtable/alloc_tracker.cc
         memtable/hash_cuckoo_rep.cc
         memtable/hash_linklist_rep.cc
         memtable/hash_skiplist_rep.cc
-        memtable/memtable_allocator.cc
         memtable/skiplistrep.cc
         memtable/vectorrep.cc
+        memtable/write_buffer_manager.cc
         monitoring/histogram.cc
         monitoring/histogram_windowing.cc
         monitoring/instrumented_mutex.cc
@@ -498,6 +501,8 @@ set(SOURCES
         utilities/memory/memory_util.cc
         utilities/merge_operators/max.cc
         utilities/merge_operators/put.cc
+        utilities/merge_operators/cassandra/format.cc
+        utilities/merge_operators/cassandra/merge_operator.cc
         utilities/merge_operators/string_append/stringappend.cc
         utilities/merge_operators/string_append/stringappend2.cc
         utilities/merge_operators/uint64add.cc
@@ -632,6 +637,7 @@ set(TESTS
         db/db_test2.cc
         db/db_universal_compaction_test.cc
         db/db_wal_test.cc
+        db/db_write_test.cc
         db/dbformat_test.cc
         db/deletefile_test.cc
         db/external_sst_file_basic_test.cc
@@ -664,6 +670,7 @@ set(TESTS
         env/mock_env_test.cc
         memtable/inlineskiplist_test.cc
         memtable/skiplist_test.cc
+        memtable/write_buffer_manager_test.cc
         monitoring/histogram_test.cc
         monitoring/iostats_context_test.cc
         monitoring/statistics_test.cc
@@ -706,6 +713,10 @@ set(TESTS
         utilities/geodb/geodb_test.cc
         utilities/lua/rocks_lua_test.cc
         utilities/memory/memory_test.cc
+        utilities/merge_operators/cassandra/cassandra_merge_test.cc
+        utilities/merge_operators/cassandra/cassandra_format_test.cc
+        utilities/merge_operators/cassandra/cassandra_row_merge_test.cc
+        utilities/merge_operators/cassandra/cassandra_serialize_test.cc
         utilities/merge_operators/string_append/stringappend_test.cc
         utilities/object_registry_test.cc
         utilities/option_change_migration/option_change_migration_test.cc
@@ -743,10 +754,10 @@ endforeach(sourcefile ${BENCHMARKS})
 # and linked to tests. Add test only code that is not #ifdefed for Release here.
 set(TESTUTIL_SOURCE
     db/db_test_util.cc
-    env/mock_env.cc
     monitoring/thread_status_updater_debug.cc
     table/mock_table.cc
     util/fault_injection_test_env.cc
+    utilities/merge_operators/cassandra/test_utils.cc
 )
 # test utilities are only build in debug
 enable_testing()

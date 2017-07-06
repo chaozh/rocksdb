@@ -97,7 +97,7 @@ class ExternalSstFileIngestionJob {
   // REQUIRES: Mutex held
   void UpdateStats();
 
-  // Cleanup after successfull/failed job
+  // Cleanup after successful/failed job
   void Cleanup(const Status& status);
 
   VersionEdit* edit() { return &edit_; }
@@ -139,6 +139,13 @@ class ExternalSstFileIngestionJob {
   // REQUIRES: Mutex held
   Status IngestedFileOverlapWithIteratorRange(
       const IngestedFileInfo* file_to_ingest, InternalIterator* iter,
+      bool* overlap);
+
+  // Check if `file_to_ingest` key range overlaps with any range deletions
+  // specified by `iter`.
+  // REQUIRES: Mutex held
+  Status IngestedFileOverlapWithRangeDeletions(
+      const IngestedFileInfo* file_to_ingest, InternalIterator* range_del_iter,
       bool* overlap);
 
   // Check if `file_to_ingest` key range overlap with level

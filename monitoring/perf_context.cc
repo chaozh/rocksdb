@@ -12,17 +12,29 @@
 namespace rocksdb {
 
 #if defined(NPERF_CONTEXT) || !defined(ROCKSDB_SUPPORT_THREAD_LOCAL)
-  PerfContext perf_context;
+PerfContext perf_context;
 #else
-  #if defined(OS_SOLARIS)
-    __thread PerfContext perf_context_;
-  #else
-    __thread PerfContext perf_context;
-  #endif
+#if defined(OS_SOLARIS)
+__thread PerfContext perf_context_;
+#else
+__thread PerfContext perf_context;
+#endif
 #endif
 
+PerfContext* get_perf_context() {
+#if defined(NPERF_CONTEXT) || !defined(ROCKSDB_SUPPORT_THREAD_LOCAL)
+  return &perf_context;
+#else
+#if defined(OS_SOLARIS)
+  return &perf_context_;
+#else
+  return &perf_context;
+#endif
+#endif
+}
+
 void PerfContext::Reset() {
-#if !defined(NPERF_CONTEXT) && defined(ROCKSDB_SUPPORT_THREAD_LOCAL)
+#ifndef NPERF_CONTEXT
   user_key_comparison_count = 0;
   block_cache_hit_count = 0;
   block_read_count = 0;
@@ -96,7 +108,7 @@ void PerfContext::Reset() {
   }
 
 std::string PerfContext::ToString(bool exclude_zero_counters) const {
-#if defined(NPERF_CONTEXT) || !defined(ROCKSDB_SUPPORT_THREAD_LOCAL)
+#ifdef NPERF_CONTEXT
   return "";
 #else
   std::ostringstream ss;
@@ -165,11 +177,5 @@ std::string PerfContext::ToString(bool exclude_zero_counters) const {
   return ss.str();
 #endif
 }
-
-#if defined(OS_SOLARIS)
-PerfContext *getPerfContext() {
-  return &perf_context_;
-}
-#endif
 
 }

@@ -771,7 +771,7 @@ struct DBOptions {
   // If enable_pipelined_write is true, separate write thread queue is
   // maintained for WAL write and memtable write. A write thread first enter WAL
   // writer queue and then memtable writer queue. Pending thread on the WAL
-  // writer queue thus only have to wait for previous writers to finish thier
+  // writer queue thus only have to wait for previous writers to finish their
   // WAL writing but not the memtable writing. Enabling the feature may improve
   // write throughput and reduce latency of the prepare phase of two-phase
   // commit.
@@ -887,6 +887,18 @@ struct DBOptions {
   // DEFAULT: false
   // Immutable.
   bool allow_ingest_behind = false;
+
+  // If enabled it uses two queues for writes, one for the ones with
+  // disable_memtable and one for the ones that also write to memtable. This
+  // allows the memtable writes not to lag behind other writes. It can be used
+  // to optimize MySQL 2PC in which only the commits, which are serial, write to
+  // memtable.
+  bool concurrent_prepare = false;
+
+  // If true WAL is not flushed automatically after each write. Instead it
+  // relies on manual invocation of FlushWAL to write the WAL buffer to its
+  // file.
+  bool manual_wal_flush = false;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)
@@ -1079,11 +1091,21 @@ struct WriteOptions {
   // immediately with Status::Incomplete().
   bool no_slowdown;
 
+  // If true, this write request is of lower priority if compaction is
+  // behind. In this case, no_slowdown = true, the request will be cancelled
+  // immediately with Status::Incomplete() returned. Otherwise, it will be
+  // slowed down. The slowdown value is determined by RocksDB to guarantee
+  // it introduces minimum impacts to high priority writes.
+  //
+  // Default: false
+  bool low_pri;
+
   WriteOptions()
       : sync(false),
         disableWAL(false),
         ignore_missing_column_families(false),
-        no_slowdown(false) {}
+        no_slowdown(false),
+        low_pri(false) {}
 };
 
 // Options that control flush operations

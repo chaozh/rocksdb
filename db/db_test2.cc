@@ -167,26 +167,61 @@ TEST_F(DBTest2, MaxSuccessiveMergesChangeWithDBRecovery) {
 #ifndef ROCKSDB_LITE
 class DBTestSharedWriteBufferAcrossCFs
     : public DBTestBase,
-      public testing::WithParamInterface<bool> {
+      public testing::WithParamInterface<std::tuple<bool, bool>> {
  public:
   DBTestSharedWriteBufferAcrossCFs()
       : DBTestBase("/db_test_shared_write_buffer") {}
-  void SetUp() override { use_old_interface_ = GetParam(); }
+  void SetUp() override {
+    use_old_interface_ = std::get<0>(GetParam());
+    cost_cache_ = std::get<1>(GetParam());
+  }
   bool use_old_interface_;
+  bool cost_cache_;
 };
 
 TEST_P(DBTestSharedWriteBufferAcrossCFs, SharedWriteBufferAcrossCFs) {
   Options options = CurrentOptions();
+  options.arena_block_size = 4096;
+
+  // Avoid undeterministic value by malloc_usable_size();
+  // Force arena block size to 1
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "Arena::Arena:0", [&](void* arg) {
+        size_t* block_size = static_cast<size_t*>(arg);
+        *block_size = 1;
+      });
+
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "Arena::AllocateNewBlock:0", [&](void* arg) {
+        std::pair<size_t*, size_t*>* pair =
+            static_cast<std::pair<size_t*, size_t*>*>(arg);
+        *std::get<0>(*pair) = *std::get<1>(*pair);
+      });
+  rocksdb::SyncPoint::GetInstance()->EnableProcessing();
+
+  // The total soft write buffer size is about 105000
+  std::shared_ptr<Cache> cache = NewLRUCache(4 * 1024 * 1024, 2);
+  ASSERT_LT(cache->GetUsage(), 1024 * 1024);
+
   if (use_old_interface_) {
-    options.db_write_buffer_size = 100000;  // this is the real limit
+    options.db_write_buffer_size = 120000;  // this is the real limit
+  } else if (!cost_cache_) {
+    options.write_buffer_manager.reset(new WriteBufferManager(114285));
   } else {
-    options.write_buffer_manager.reset(new WriteBufferManager(100000));
+    options.write_buffer_manager.reset(new WriteBufferManager(114285, cache));
   }
   options.write_buffer_size = 500000;  // this is never hit
   CreateAndReopenWithCF({"pikachu", "dobrynia", "nikitich"}, options);
 
   WriteOptions wo;
   wo.disableWAL = true;
+
+  std::function<void()> wait_flush = [&]() {
+    dbfull()->TEST_WaitForFlushMemTable(handles_[0]);
+    dbfull()->TEST_WaitForFlushMemTable(handles_[1]);
+    dbfull()->TEST_WaitForFlushMemTable(handles_[2]);
+    dbfull()->TEST_WaitForFlushMemTable(handles_[3]);
+  };
 
   // Create some data and flush "default" and "nikitich" so that they
   // are newer CFs created.
@@ -201,13 +236,20 @@ TEST_P(DBTestSharedWriteBufferAcrossCFs, SharedWriteBufferAcrossCFs) {
             static_cast<uint64_t>(1));
 
   ASSERT_OK(Put(3, Key(1), DummyString(30000), wo));
+  if (cost_cache_) {
+    ASSERT_GE(cache->GetUsage(), 1024 * 1024);
+    ASSERT_LE(cache->GetUsage(), 2 * 1024 * 1024);
+  }
+  wait_flush();
   ASSERT_OK(Put(0, Key(1), DummyString(60000), wo));
+  if (cost_cache_) {
+    ASSERT_GE(cache->GetUsage(), 1024 * 1024);
+    ASSERT_LE(cache->GetUsage(), 2 * 1024 * 1024);
+  }
+  wait_flush();
   ASSERT_OK(Put(2, Key(1), DummyString(1), wo));
   // No flush should trigger
-  dbfull()->TEST_WaitForFlushMemTable(handles_[0]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[1]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[2]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[3]);
+  wait_flush();
   {
     ASSERT_EQ(GetNumberOfSstFilesForColumnFamily(db_, "default"),
               static_cast<uint64_t>(1));
@@ -221,11 +263,9 @@ TEST_P(DBTestSharedWriteBufferAcrossCFs, SharedWriteBufferAcrossCFs) {
 
   // Trigger a flush. Flushing "nikitich".
   ASSERT_OK(Put(3, Key(2), DummyString(30000), wo));
+  wait_flush();
   ASSERT_OK(Put(0, Key(1), DummyString(1), wo));
-  dbfull()->TEST_WaitForFlushMemTable(handles_[0]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[1]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[2]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[3]);
+  wait_flush();
   {
     ASSERT_EQ(GetNumberOfSstFilesForColumnFamily(db_, "default"),
               static_cast<uint64_t>(1));
@@ -239,12 +279,11 @@ TEST_P(DBTestSharedWriteBufferAcrossCFs, SharedWriteBufferAcrossCFs) {
 
   // Without hitting the threshold, no flush should trigger.
   ASSERT_OK(Put(2, Key(1), DummyString(30000), wo));
+  wait_flush();
   ASSERT_OK(Put(2, Key(1), DummyString(1), wo));
+  wait_flush();
   ASSERT_OK(Put(2, Key(1), DummyString(1), wo));
-  dbfull()->TEST_WaitForFlushMemTable(handles_[0]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[1]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[2]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[3]);
+  wait_flush();
   {
     ASSERT_EQ(GetNumberOfSstFilesForColumnFamily(db_, "default"),
               static_cast<uint64_t>(1));
@@ -259,14 +298,15 @@ TEST_P(DBTestSharedWriteBufferAcrossCFs, SharedWriteBufferAcrossCFs) {
   // Hit the write buffer limit again. "default"
   // will have been flushed.
   ASSERT_OK(Put(2, Key(2), DummyString(10000), wo));
+  wait_flush();
   ASSERT_OK(Put(3, Key(1), DummyString(1), wo));
+  wait_flush();
   ASSERT_OK(Put(0, Key(1), DummyString(1), wo));
+  wait_flush();
   ASSERT_OK(Put(0, Key(1), DummyString(1), wo));
+  wait_flush();
   ASSERT_OK(Put(0, Key(1), DummyString(1), wo));
-  dbfull()->TEST_WaitForFlushMemTable(handles_[0]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[1]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[2]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[3]);
+  wait_flush();
   {
     ASSERT_EQ(GetNumberOfSstFilesForColumnFamily(db_, "default"),
               static_cast<uint64_t>(2));
@@ -281,13 +321,14 @@ TEST_P(DBTestSharedWriteBufferAcrossCFs, SharedWriteBufferAcrossCFs) {
   // Trigger another flush. This time "dobrynia". "pikachu" should not
   // be flushed, althrough it was never flushed.
   ASSERT_OK(Put(1, Key(1), DummyString(1), wo));
+  wait_flush();
   ASSERT_OK(Put(2, Key(1), DummyString(80000), wo));
+  wait_flush();
   ASSERT_OK(Put(1, Key(1), DummyString(1), wo));
+  wait_flush();
   ASSERT_OK(Put(2, Key(1), DummyString(1), wo));
-  dbfull()->TEST_WaitForFlushMemTable(handles_[0]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[1]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[2]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[3]);
+  wait_flush();
+
   {
     ASSERT_EQ(GetNumberOfSstFilesForColumnFamily(db_, "default"),
               static_cast<uint64_t>(2));
@@ -298,16 +339,45 @@ TEST_P(DBTestSharedWriteBufferAcrossCFs, SharedWriteBufferAcrossCFs) {
     ASSERT_EQ(GetNumberOfSstFilesForColumnFamily(db_, "nikitich"),
               static_cast<uint64_t>(2));
   }
+  if (cost_cache_) {
+    ASSERT_GE(cache->GetUsage(), 1024 * 1024);
+    Close();
+    options.write_buffer_manager.reset();
+    ASSERT_LT(cache->GetUsage(), 1024 * 1024);
+  }
+  rocksdb::SyncPoint::GetInstance()->DisableProcessing();
 }
 
 INSTANTIATE_TEST_CASE_P(DBTestSharedWriteBufferAcrossCFs,
-                        DBTestSharedWriteBufferAcrossCFs, ::testing::Bool());
+                        DBTestSharedWriteBufferAcrossCFs,
+                        ::testing::Values(std::make_tuple(true, false),
+                                          std::make_tuple(false, false),
+                                          std::make_tuple(false, true)));
 
 TEST_F(DBTest2, SharedWriteBufferLimitAcrossDB) {
   std::string dbname2 = test::TmpDir(env_) + "/db_shared_wb_db2";
   Options options = CurrentOptions();
+  options.arena_block_size = 4096;
+  // Avoid undeterministic value by malloc_usable_size();
+  // Force arena block size to 1
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "Arena::Arena:0", [&](void* arg) {
+        size_t* block_size = static_cast<size_t*>(arg);
+        *block_size = 1;
+      });
+
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "Arena::AllocateNewBlock:0", [&](void* arg) {
+        std::pair<size_t*, size_t*>* pair =
+            static_cast<std::pair<size_t*, size_t*>*>(arg);
+        *std::get<0>(*pair) = *std::get<1>(*pair);
+      });
+  rocksdb::SyncPoint::GetInstance()->EnableProcessing();
+
   options.write_buffer_size = 500000;  // this is never hit
-  options.write_buffer_manager.reset(new WriteBufferManager(100000));
+  // Use a write buffer total size so that the soft limit is about
+  // 105000.
+  options.write_buffer_manager.reset(new WriteBufferManager(120000));
   CreateAndReopenWithCF({"cf1", "cf2"}, options);
 
   ASSERT_OK(DestroyDB(dbname2, options));
@@ -317,17 +387,25 @@ TEST_F(DBTest2, SharedWriteBufferLimitAcrossDB) {
   WriteOptions wo;
   wo.disableWAL = true;
 
+  std::function<void()> wait_flush = [&]() {
+    dbfull()->TEST_WaitForFlushMemTable(handles_[0]);
+    dbfull()->TEST_WaitForFlushMemTable(handles_[1]);
+    dbfull()->TEST_WaitForFlushMemTable(handles_[2]);
+    static_cast<DBImpl*>(db2)->TEST_WaitForFlushMemTable();
+  };
+
   // Trigger a flush on cf2
   ASSERT_OK(Put(2, Key(1), DummyString(70000), wo));
+  wait_flush();
   ASSERT_OK(Put(0, Key(1), DummyString(20000), wo));
+  wait_flush();
 
   // Insert to DB2
   ASSERT_OK(db2->Put(wo, Key(2), DummyString(20000)));
+  wait_flush();
 
   ASSERT_OK(Put(2, Key(1), DummyString(1), wo));
-  dbfull()->TEST_WaitForFlushMemTable(handles_[0]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[1]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[2]);
+  wait_flush();
   static_cast<DBImpl*>(db2)->TEST_WaitForFlushMemTable();
   {
     ASSERT_EQ(GetNumberOfSstFilesForColumnFamily(db_, "default") +
@@ -340,10 +418,9 @@ TEST_F(DBTest2, SharedWriteBufferLimitAcrossDB) {
 
   // Triggering to flush another CF in DB1
   ASSERT_OK(db2->Put(wo, Key(2), DummyString(70000)));
+  wait_flush();
   ASSERT_OK(Put(2, Key(1), DummyString(1), wo));
-  dbfull()->TEST_WaitForFlushMemTable(handles_[0]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[1]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[2]);
+  wait_flush();
   {
     ASSERT_EQ(GetNumberOfSstFilesForColumnFamily(db_, "default"),
               static_cast<uint64_t>(1));
@@ -357,10 +434,9 @@ TEST_F(DBTest2, SharedWriteBufferLimitAcrossDB) {
 
   // Triggering flush in DB2.
   ASSERT_OK(db2->Put(wo, Key(3), DummyString(40000)));
+  wait_flush();
   ASSERT_OK(db2->Put(wo, Key(1), DummyString(1)));
-  dbfull()->TEST_WaitForFlushMemTable(handles_[0]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[1]);
-  dbfull()->TEST_WaitForFlushMemTable(handles_[2]);
+  wait_flush();
   static_cast<DBImpl*>(db2)->TEST_WaitForFlushMemTable();
   {
     ASSERT_EQ(GetNumberOfSstFilesForColumnFamily(db_, "default"),
@@ -375,6 +451,8 @@ TEST_F(DBTest2, SharedWriteBufferLimitAcrossDB) {
 
   delete db2;
   ASSERT_OK(DestroyDB(dbname2, options));
+
+  rocksdb::SyncPoint::GetInstance()->DisableProcessing();
 }
 
 namespace {
@@ -952,6 +1030,7 @@ TEST_F(DBTest2, PresetCompressionDict) {
   const int kNumL0Files = 5;
 
   Options options;
+  options.env = CurrentOptions().env; // Make sure to use any custom env that the test is configured with.
   options.allow_concurrent_memtable_write = false;
   options.arena_block_size = kBlockSizeBytes;
   options.compaction_style = kCompactionStyleUniversal;
@@ -2108,6 +2187,121 @@ TEST_F(DBTest2, MemtableOnlyIterator) {
   ASSERT_EQ(1, count);
   delete it;
 }
+
+TEST_F(DBTest2, LowPriWrite) {
+  Options options = CurrentOptions();
+  // Compaction pressure should trigger since 6 files
+  options.level0_file_num_compaction_trigger = 4;
+  options.level0_slowdown_writes_trigger = 12;
+  options.level0_stop_writes_trigger = 30;
+  options.delayed_write_rate = 8 * 1024 * 1024;
+  Reopen(options);
+
+  std::atomic<int> rate_limit_count(0);
+
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "GenericRateLimiter::Request:1", [&](void* arg) {
+        rate_limit_count.fetch_add(1);
+        int64_t* rate_bytes_per_sec = static_cast<int64_t*>(arg);
+        ASSERT_EQ(1024 * 1024, *rate_bytes_per_sec);
+      });
+  // Block compaction
+  rocksdb::SyncPoint::GetInstance()->LoadDependency({
+      {"DBTest.LowPriWrite:0", "DBImpl::BGWorkCompaction"},
+  });
+  rocksdb::SyncPoint::GetInstance()->EnableProcessing();
+  WriteOptions wo;
+  for (int i = 0; i < 6; i++) {
+    wo.low_pri = false;
+    Put("", "", wo);
+    wo.low_pri = true;
+    Put("", "", wo);
+    Flush();
+  }
+  ASSERT_EQ(0, rate_limit_count.load());
+  wo.low_pri = true;
+  Put("", "", wo);
+  ASSERT_EQ(1, rate_limit_count.load());
+  wo.low_pri = false;
+  Put("", "", wo);
+  ASSERT_EQ(1, rate_limit_count.load());
+
+  TEST_SYNC_POINT("DBTest.LowPriWrite:0");
+  rocksdb::SyncPoint::GetInstance()->DisableProcessing();
+
+  dbfull()->TEST_WaitForCompact();
+  wo.low_pri = true;
+  Put("", "", wo);
+  ASSERT_EQ(1, rate_limit_count.load());
+  wo.low_pri = false;
+  Put("", "", wo);
+  ASSERT_EQ(1, rate_limit_count.load());
+}
+
+TEST_F(DBTest2, RateLimitedCompactionReads) {
+  // compaction input has 512KB data
+  const int kNumKeysPerFile = 128;
+  const int kBytesPerKey = 1024;
+  const int kNumL0Files = 4;
+
+  for (auto use_direct_io : {false, true}) {
+    if (use_direct_io && !IsDirectIOSupported()) {
+      continue;
+    }
+    Options options = CurrentOptions();
+    options.compression = kNoCompression;
+    options.level0_file_num_compaction_trigger = kNumL0Files;
+    options.memtable_factory.reset(new SpecialSkipListFactory(kNumKeysPerFile));
+    options.new_table_reader_for_compaction_inputs = true;
+    // takes roughly one second, split into 100 x 10ms intervals. Each interval
+    // permits 5.12KB, which is smaller than the block size, so this test
+    // exercises the code for chunking reads.
+    options.rate_limiter.reset(NewGenericRateLimiter(
+        static_cast<int64_t>(kNumL0Files * kNumKeysPerFile *
+                             kBytesPerKey) /* rate_bytes_per_sec */,
+        10 * 1000 /* refill_period_us */, 10 /* fairness */,
+        RateLimiter::Mode::kReadsOnly));
+    options.use_direct_io_for_flush_and_compaction = use_direct_io;
+    BlockBasedTableOptions bbto;
+    bbto.block_size = 16384;
+    bbto.no_block_cache = true;
+    options.table_factory.reset(new BlockBasedTableFactory(bbto));
+    DestroyAndReopen(options);
+
+    for (int i = 0; i < kNumL0Files; ++i) {
+      for (int j = 0; j <= kNumKeysPerFile; ++j) {
+        ASSERT_OK(Put(Key(j), DummyString(kBytesPerKey)));
+      }
+      dbfull()->TEST_WaitForFlushMemTable();
+      ASSERT_EQ(i + 1, NumTableFilesAtLevel(0));
+    }
+    dbfull()->TEST_WaitForCompact();
+    ASSERT_EQ(0, NumTableFilesAtLevel(0));
+
+    ASSERT_EQ(0, options.rate_limiter->GetTotalBytesThrough(Env::IO_HIGH));
+    // should be slightly above 512KB due to non-data blocks read. Arbitrarily
+    // chose 1MB as the upper bound on the total bytes read.
+    size_t rate_limited_bytes =
+        options.rate_limiter->GetTotalBytesThrough(Env::IO_LOW);
+    ASSERT_GE(
+        rate_limited_bytes,
+        static_cast<size_t>(kNumKeysPerFile * kBytesPerKey * kNumL0Files));
+    ASSERT_LT(
+        rate_limited_bytes,
+        static_cast<size_t>(2 * kNumKeysPerFile * kBytesPerKey * kNumL0Files));
+
+    Iterator* iter = db_->NewIterator(ReadOptions());
+    for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+      ASSERT_EQ(iter->value().ToString(), DummyString(kBytesPerKey));
+    }
+    delete iter;
+    // bytes read for user iterator shouldn't count against the rate limit.
+    ASSERT_EQ(rate_limited_bytes,
+              static_cast<size_t>(
+                  options.rate_limiter->GetTotalBytesThrough(Env::IO_LOW)));
+  }
+}
+
 }  // namespace rocksdb
 
 int main(int argc, char** argv) {

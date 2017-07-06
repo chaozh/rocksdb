@@ -323,6 +323,7 @@ EXPOBJECTS = $(EXP_LIB_SOURCES:.cc=.o) $(LIBOBJECTS) $(TESTUTIL)
 
 TESTS = \
 	db_basic_test \
+	db_encryption_test \
 	db_test2 \
 	external_sst_file_basic_test \
 	auto_roll_logger_test \
@@ -362,7 +363,9 @@ TESTS = \
 	db_properties_test \
 	db_table_properties_test \
 	db_statistics_test \
+	db_write_test \
 	autovector_test \
+	blob_db_test \
 	cleanable_test \
 	column_family_test \
 	table_properties_collector_test \
@@ -398,7 +401,12 @@ TESTS = \
 	external_sst_file_test \
 	prefix_test \
 	skiplist_test \
+	write_buffer_manager_test \
 	stringappend_test \
+	cassandra_format_test \
+	cassandra_merge_test \
+	cassandra_row_merge_test \
+	cassandra_serialize_test \
 	ttl_test \
 	date_tiered_test \
 	backupable_db_test \
@@ -988,6 +996,18 @@ option_change_migration_test: utilities/option_change_migration/option_change_mi
 stringappend_test: utilities/merge_operators/string_append/stringappend_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
+cassandra_format_test: utilities/merge_operators/cassandra/cassandra_format_test.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+cassandra_merge_test: utilities/merge_operators/cassandra/cassandra_merge_test.o utilities/merge_operators/cassandra/test_utils.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+cassandra_row_merge_test: utilities/merge_operators/cassandra/cassandra_row_merge_test.o utilities/merge_operators/cassandra/test_utils.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+cassandra_serialize_test: utilities/merge_operators/cassandra/cassandra_serialize_test.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
 redis_test: utilities/redis/redis_lists_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
@@ -1010,6 +1030,9 @@ slice_transform_test: util/slice_transform_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 db_basic_test: db/db_basic_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+db_encryption_test: db/db_encryption_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 db_test: db/db_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
@@ -1061,6 +1084,9 @@ db_sst_test: db/db_sst_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 db_statistics_test: db/db_statistics_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+db_write_test: db/db_write_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 external_sst_file_basic_test: db/external_sst_file_basic_test.o db/db_test_util.o $(LIBOBJECTS) $(TESTHARNESS)
@@ -1216,6 +1242,9 @@ inlineskiplist_test: memtable/inlineskiplist_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 skiplist_test: memtable/skiplist_test.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+write_buffer_manager_test: memtable/write_buffer_manager_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 version_edit_test: db/version_edit_test.o $(LIBOBJECTS) $(TESTHARNESS)
@@ -1583,12 +1612,12 @@ rocksdbjavastaticrelease: rocksdbjavastatic
 rocksdbjavastaticreleasedocker: rocksdbjavastatic
 	DOCKER_LINUX_X64_CONTAINER=`docker ps -aqf name=rocksdb_linux_x64-be`; \
 	if [ -z "$$DOCKER_LINUX_X64_CONTAINER" ]; then \
-		docker container create --attach stdin --attach stdout --attach stderr --volume `pwd`:/rocksdb-host --name rocksdb_linux_x64-be evolvedbinary/rocksjava:centos5_x64-be /rocksdb-host/java/crossbuild/docker-build-linux-centos.sh; \
+		docker container create --attach stdin --attach stdout --attach stderr --volume `pwd`:/rocksdb-host --name rocksdb_linux_x64-be evolvedbinary/rocksjava:centos6_x64-be /rocksdb-host/java/crossbuild/docker-build-linux-centos.sh; \
 	fi
 	docker start -a rocksdb_linux_x64-be
 	DOCKER_LINUX_X86_CONTAINER=`docker ps -aqf name=rocksdb_linux_x86-be`; \
 	if [ -z "$$DOCKER_LINUX_X86_CONTAINER" ]; then \
-		docker container create --attach stdin --attach stdout --attach stderr --volume `pwd`:/rocksdb-host --name rocksdb_linux_x86-be evolvedbinary/rocksjava:centos5_x86-be /rocksdb-host/java/crossbuild/docker-build-linux-centos.sh; \
+		docker container create --attach stdin --attach stdout --attach stderr --volume `pwd`:/rocksdb-host --name rocksdb_linux_x86-be evolvedbinary/rocksjava:centos6_x86-be /rocksdb-host/java/crossbuild/docker-build-linux-centos.sh; \
 	fi
 	docker start -a rocksdb_linux_x86-be
 	cd java;jar -cf target/$(ROCKSDB_JAR_ALL) HISTORY*.md
