@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 
 #ifndef ROCKSDB_LITE
 
@@ -706,7 +704,7 @@ DBOptions GetDBOptionsFromSpatialDBOptions(const SpatialDBOptions& options) {
   return db_options;
 }
 
-ColumnFamilyOptions GetColumnFamilyOptions(const SpatialDBOptions& options,
+ColumnFamilyOptions GetColumnFamilyOptions(const SpatialDBOptions& /*options*/,
                                            std::shared_ptr<Cache> block_cache) {
   ColumnFamilyOptions column_family_options;
   column_family_options.write_buffer_size = 128 * 1024 * 1024;  // 128MB

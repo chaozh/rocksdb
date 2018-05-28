@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -69,8 +67,7 @@ class BlockReadAmpBitmap {
     size_t bitmap_size = (num_bits_needed - 1) / kBitsPerEntry + 1;
 
     // Create bitmap and set all the bits to 0
-    bitmap_ = new std::atomic<uint32_t>[bitmap_size];
-    memset(bitmap_, 0, bitmap_size * kBytesPersEntry);
+    bitmap_ = new std::atomic<uint32_t>[bitmap_size]();
 
     RecordTick(GetStatistics(), READ_AMP_TOTAL_READ_BYTES, block_size);
   }
@@ -165,16 +162,21 @@ class Block {
   // the iterator will simply be set as "invalid", rather than returning
   // the key that is just pass the target key.
   //
+  // If comparator is InternalKeyComparator, user_comparator is its user
+  // comparator; they are equal otherwise.
+  //
   // If iter is null, return new Iterator
   // If iter is not null, update this one and return it as Iterator*
   //
   // If total_order_seek is true, hash_index_ and prefix_index_ are ignored.
   // This option only applies for index block. For data block, hash_index_
   // and prefix_index_ are null, so this option does not matter.
-  InternalIterator* NewIterator(const Comparator* comparator,
-                                BlockIter* iter = nullptr,
-                                bool total_order_seek = true,
-                                Statistics* stats = nullptr);
+  BlockIter* NewIterator(const Comparator* comparator,
+                         const Comparator* user_comparator,
+                         BlockIter* iter = nullptr,
+                         bool total_order_seek = true,
+                         Statistics* stats = nullptr,
+                         bool key_includes_seq = true);
   void SetBlockPrefixIndex(BlockPrefixIndex* prefix_index);
 
   // Report an approximation of how much memory has been used.
@@ -187,6 +189,7 @@ class Block {
   const char* data_;            // contents_.data.data()
   size_t size_;                 // contents_.data.size()
   uint32_t restart_offset_;     // Offset in data_ of restart array
+  uint32_t num_restarts_;
   std::unique_ptr<BlockPrefixIndex> prefix_index_;
   std::unique_ptr<BlockReadAmpBitmap> read_amp_bitmap_;
   // All keys in the block will have seqno = global_seqno_, regardless of
@@ -194,14 +197,18 @@ class Block {
   const SequenceNumber global_seqno_;
 
   // No copying allowed
-  Block(const Block&);
-  void operator=(const Block&);
+  Block(const Block&) = delete;
+  void operator=(const Block&) = delete;
 };
 
-class BlockIter : public InternalIterator {
+class BlockIter final : public InternalIterator {
  public:
+  // Object created using this constructor will behave like an iterator
+  // against an empty block. The state after the creation: Valid()=false
+  // and status() is OK.
   BlockIter()
       : comparator_(nullptr),
+        user_comparator_(nullptr),
         data_(nullptr),
         restarts_(0),
         num_restarts_(0),
@@ -210,26 +217,30 @@ class BlockIter : public InternalIterator {
         status_(Status::OK()),
         prefix_index_(nullptr),
         key_pinned_(false),
+        key_includes_seq_(true),
         global_seqno_(kDisableGlobalSequenceNumber),
         read_amp_bitmap_(nullptr),
         last_bitmap_offset_(0) {}
 
-  BlockIter(const Comparator* comparator, const char* data, uint32_t restarts,
-            uint32_t num_restarts, BlockPrefixIndex* prefix_index,
-            SequenceNumber global_seqno, BlockReadAmpBitmap* read_amp_bitmap)
+  BlockIter(const Comparator* comparator, const Comparator* user_comparator,
+            const char* data, uint32_t restarts, uint32_t num_restarts,
+            BlockPrefixIndex* prefix_index, SequenceNumber global_seqno,
+            BlockReadAmpBitmap* read_amp_bitmap, bool key_includes_seq)
       : BlockIter() {
-    Initialize(comparator, data, restarts, num_restarts, prefix_index,
-               global_seqno, read_amp_bitmap);
+    Initialize(comparator, user_comparator, data, restarts, num_restarts,
+               prefix_index, global_seqno, read_amp_bitmap, key_includes_seq);
   }
 
-  void Initialize(const Comparator* comparator, const char* data,
+  void Initialize(const Comparator* comparator,
+                  const Comparator* user_comparator, const char* data,
                   uint32_t restarts, uint32_t num_restarts,
                   BlockPrefixIndex* prefix_index, SequenceNumber global_seqno,
-                  BlockReadAmpBitmap* read_amp_bitmap) {
+                  BlockReadAmpBitmap* read_amp_bitmap, bool key_includes_seq) {
     assert(data_ == nullptr);           // Ensure it is called only once
     assert(num_restarts > 0);           // Ensure the param is valid
 
     comparator_ = comparator;
+    user_comparator_ = user_comparator;
     data_ = data;
     restarts_ = restarts;
     num_restarts_ = num_restarts;
@@ -239,17 +250,31 @@ class BlockIter : public InternalIterator {
     global_seqno_ = global_seqno;
     read_amp_bitmap_ = read_amp_bitmap;
     last_bitmap_offset_ = current_ + 1;
+    key_includes_seq_ = key_includes_seq;
   }
 
-  void SetStatus(Status s) {
+  // Makes Valid() return false, status() return `s`, and Seek()/Prev()/etc do
+  // nothing.
+  void Invalidate(Status s) {
+    // Assert that the BlockIter is never deleted while Pinning is Enabled.
+    assert(!pinned_iters_mgr_ ||
+           (pinned_iters_mgr_ && !pinned_iters_mgr_->PinningEnabled()));
+
+    data_ = nullptr;
+    current_ = restarts_;
     status_ = s;
+
+    // Clear prev entries cache.
+    prev_entries_keys_buff_.clear();
+    prev_entries_.clear();
+    prev_entries_idx_ = -1;
   }
 
   virtual bool Valid() const override { return current_ < restarts_; }
   virtual Status status() const override { return status_; }
   virtual Slice key() const override {
     assert(Valid());
-    return key_.GetInternalKey();
+    return key_includes_seq_ ? key_.GetInternalKey() : key_.GetUserKey();
   }
   virtual Slice value() const override {
     assert(Valid());
@@ -298,7 +323,11 @@ class BlockIter : public InternalIterator {
   }
 
  private:
+  // Note: The type could be changed to InternalKeyComparator but we see a weird
+  // performance drop by that.
   const Comparator* comparator_;
+  // Same as comparator_ if comparator_ is not InernalKeyComparator
+  const Comparator* user_comparator_;
   const char* data_;       // underlying block contents
   uint32_t restarts_;      // Offset of restart array (list of fixed32)
   uint32_t num_restarts_;  // Number of uint32_t entries in restart array
@@ -311,8 +340,11 @@ class BlockIter : public InternalIterator {
   Status status_;
   BlockPrefixIndex* prefix_index_;
   bool key_pinned_;
+  // Key is in InternalKey format
+  bool key_includes_seq_;
   SequenceNumber global_seqno_;
 
+ public:
   // read-amp bitmap
   BlockReadAmpBitmap* read_amp_bitmap_;
   // last `current_` value we report to read-amp bitmp
@@ -343,7 +375,19 @@ class BlockIter : public InternalIterator {
   int32_t prev_entries_idx_ = -1;
 
   inline int Compare(const Slice& a, const Slice& b) const {
-    return comparator_->Compare(a, b);
+    if (key_includes_seq_) {
+      return comparator_->Compare(a, b);
+    } else {
+      return user_comparator_->Compare(a, b);
+    }
+  }
+
+  inline int Compare(const IterKey& ikey, const Slice& b) const {
+    if (key_includes_seq_) {
+      return comparator_->Compare(ikey.GetInternalKey(), b);
+    } else {
+      return user_comparator_->Compare(ikey.GetUserKey(), b);
+    }
   }
 
   // Return the offset in data_ just past the end of the current entry.

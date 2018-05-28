@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -42,6 +40,7 @@ class Compaction {
              std::vector<CompactionInputFiles> inputs, int output_level,
              uint64_t target_file_size, uint64_t max_compaction_bytes,
              uint32_t output_path_id, CompressionType compression,
+             uint32_t max_subcompactions,
              std::vector<FileMetaData*> grandparents,
              bool manual_compaction = false, double score = -1,
              bool deletion_compaction = false,
@@ -235,6 +234,8 @@ class Compaction {
 
   Slice GetLargestUserKey() const { return largest_user_key_; }
 
+  int GetInputBaseLevel() const;
+
   CompactionReason compaction_reason() { return compaction_reason_; }
 
   const std::vector<FileMetaData*>& grandparents() const {
@@ -242,6 +243,8 @@ class Compaction {
   }
 
   uint64_t max_compaction_bytes() const { return max_compaction_bytes_; }
+
+  uint32_t max_subcompactions() const { return max_subcompactions_; }
 
   uint64_t MaxInputFileCreationTime() const;
 
@@ -269,6 +272,7 @@ class Compaction {
   const int output_level_;  // levels to which output files are stored
   uint64_t max_output_file_size_;
   uint64_t max_compaction_bytes_;
+  uint32_t max_subcompactions_;
   const ImmutableCFOptions immutable_cf_options_;
   const MutableCFOptions mutable_cf_options_;
   Version* input_version_;

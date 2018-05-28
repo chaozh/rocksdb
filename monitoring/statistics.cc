@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 #include "monitoring/statistics.h"
 
@@ -171,11 +169,17 @@ std::string StatisticsImpl::ToString() const {
       char buffer[kTmpStrBufferSize];
       HistogramData hData;
       getHistogramImplLocked(h.first)->Data(&hData);
-      snprintf(
+      // don't handle failures - buffer should always be big enough and arguments
+      // should be provided correctly
+      int ret = snprintf(
           buffer, kTmpStrBufferSize,
-          "%s statistics Percentiles :=> 50 : %f 95 : %f 99 : %f 100 : %f\n",
-          h.second.c_str(), hData.median, hData.percentile95,
-          hData.percentile99, hData.max);
+          "%s P50 : %f P95 : %f P99 : %f P100 : %f COUNT : %" PRIu64 " SUM : %"
+          PRIu64 "\n", h.second.c_str(), hData.median, hData.percentile95,
+          hData.percentile99, hData.max, hData.count, hData.sum);
+      if (ret < 0 || ret >= kTmpStrBufferSize) {
+        assert(false);
+        continue;
+      }
       res.append(buffer);
     }
   }

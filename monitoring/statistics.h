@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 #pragma once
 #include "rocksdb/statistics.h"
@@ -78,8 +76,7 @@ class StatisticsImpl : public Statistics {
         padding[(CACHE_LINE_SIZE -
                  (INTERNAL_TICKER_ENUM_MAX * sizeof(std::atomic_uint_fast64_t) +
                   INTERNAL_HISTOGRAM_ENUM_MAX * sizeof(HistogramImpl)) %
-                     CACHE_LINE_SIZE) %
-                CACHE_LINE_SIZE] ROCKSDB_FIELD_UNUSED;
+                     CACHE_LINE_SIZE)] ROCKSDB_FIELD_UNUSED;
   };
 
   static_assert(sizeof(StatisticsData) % 64 == 0, "Expected 64-byte aligned");

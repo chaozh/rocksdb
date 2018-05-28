@@ -1,7 +1,7 @@
 // Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-// This source code is licensed under the BSD-style license found in the
-// LICENSE file in the root directory of this source tree. An additional grant
-// of patent rights can be found in the PATENTS file in the same directory.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 
 package org.rocksdb;
 
@@ -435,7 +435,7 @@ public class RocksDB extends RocksObject {
         path));
   }
 
-  private void storeOptionsInstance(DBOptionsInterface options) {
+  protected void storeOptionsInstance(DBOptionsInterface options) {
     options_ = options;
   }
 
@@ -1683,7 +1683,7 @@ public class RocksDB extends RocksObject {
    * @return The handle of the default column family
    */
   public ColumnFamilyHandle getDefaultColumnFamily() {
-    ColumnFamilyHandle cfHandle = new ColumnFamilyHandle(this,
+    final ColumnFamilyHandle cfHandle = new ColumnFamilyHandle(this,
         getDefaultColumnFamily(nativeHandle_));
     cfHandle.disOwnNativeHandle();
     return cfHandle;
@@ -2175,6 +2175,21 @@ public class RocksDB extends RocksObject {
   }
 
   /**
+   * Static method to destroy the contents of the specified database.
+   * Be very careful using this method.
+   *
+   * @param path the path to the Rocksdb database.
+   * @param options {@link org.rocksdb.Options} instance.
+   *
+   * @throws RocksDBException thrown if error happens in underlying
+   *    native library.
+   */
+  public static void destroyDB(final String path, final Options options)
+      throws RocksDBException {
+    destroyDB(path, options.nativeHandle_);
+  }
+
+  /**
    * Private constructor.
    *
    * @param nativeHandle The native handle of the C++ RocksDB object
@@ -2344,8 +2359,9 @@ public class RocksDB extends RocksObject {
       final long[] columnFamilyHandles, final long readOptHandle)
       throws RocksDBException;
   protected native long getSnapshot(long nativeHandle);
-  protected native void releaseSnapshot(long nativeHandle, long snapshotHandle);
-  @Override protected final native void disposeInternal(final long handle);
+  protected native void releaseSnapshot(
+      long nativeHandle, long snapshotHandle);
+  @Override protected native void disposeInternal(final long handle);
   private native long getDefaultColumnFamily(long handle);
   private native long createColumnFamily(final long handle,
       final byte[] columnFamilyName, final long columnFamilyOptions)
@@ -2380,5 +2396,7 @@ public class RocksDB extends RocksObject {
   private native void ingestExternalFile(long handle, long cfHandle,
       String[] filePathList, int filePathListLen,
       long ingest_external_file_options_handle) throws RocksDBException;
+  private native static void destroyDB(final String path,
+      final long optionsHandle) throws RocksDBException;
   protected DBOptionsInterface options_;
 }

@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 #include "util/file_reader_writer.h"
 #include <algorithm>
@@ -28,9 +26,7 @@ TEST_F(WritableFileWriterTest, RangeSync) {
       size_ += data.size();
       return Status::OK();
     }
-    virtual Status Truncate(uint64_t size) override {
-      return Status::OK();
-    }
+    virtual Status Truncate(uint64_t /*size*/) override { return Status::OK(); }
     Status Close() override {
       EXPECT_GE(size_, last_synced_ + kMb);
       EXPECT_LT(size_, last_synced_ + 2 * kMb);
@@ -41,17 +37,21 @@ TEST_F(WritableFileWriterTest, RangeSync) {
     Status Flush() override { return Status::OK(); }
     Status Sync() override { return Status::OK(); }
     Status Fsync() override { return Status::OK(); }
-    void SetIOPriority(Env::IOPriority pri) override {}
+    void SetIOPriority(Env::IOPriority /*pri*/) override {}
     uint64_t GetFileSize() override { return size_; }
-    void GetPreallocationStatus(size_t* block_size,
-                                size_t* last_allocated_block) override {}
-    size_t GetUniqueId(char* id, size_t max_size) const override { return 0; }
-    Status InvalidateCache(size_t offset, size_t length) override {
+    void GetPreallocationStatus(size_t* /*block_size*/,
+                                size_t* /*last_allocated_block*/) override {}
+    size_t GetUniqueId(char* /*id*/, size_t /*max_size*/) const override {
+      return 0;
+    }
+    Status InvalidateCache(size_t /*offset*/, size_t /*length*/) override {
       return Status::OK();
     }
 
    protected:
-    Status Allocate(uint64_t offset, uint64_t len) override { return Status::OK(); }
+    Status Allocate(uint64_t /*offset*/, uint64_t /*len*/) override {
+      return Status::OK();
+    }
     Status RangeSync(uint64_t offset, uint64_t nbytes) override {
       EXPECT_EQ(offset % 4096, 0u);
       EXPECT_EQ(nbytes % 4096, 0u);
@@ -121,12 +121,14 @@ TEST_F(WritableFileWriterTest, IncrementalBuffer) {
     Status Flush() override { return Status::OK(); }
     Status Sync() override { return Status::OK(); }
     Status Fsync() override { return Status::OK(); }
-    void SetIOPriority(Env::IOPriority pri) override {}
+    void SetIOPriority(Env::IOPriority /*pri*/) override {}
     uint64_t GetFileSize() override { return size_; }
-    void GetPreallocationStatus(size_t* block_size,
-                                size_t* last_allocated_block) override {}
-    size_t GetUniqueId(char* id, size_t max_size) const override { return 0; }
-    Status InvalidateCache(size_t offset, size_t length) override {
+    void GetPreallocationStatus(size_t* /*block_size*/,
+                                size_t* /*last_allocated_block*/) override {}
+    size_t GetUniqueId(char* /*id*/, size_t /*max_size*/) const override {
+      return 0;
+    }
+    Status InvalidateCache(size_t /*offset*/, size_t /*length*/) override {
       return Status::OK();
     }
     bool use_direct_io() const override { return use_direct_io_; }
@@ -145,7 +147,13 @@ TEST_F(WritableFileWriterTest, IncrementalBuffer) {
     env_options.writable_file_max_buffer_size =
         (attempt < kNumAttempts / 2) ? 512 * 1024 : 700 * 1024;
     std::string actual;
-    unique_ptr<FakeWF> wf(new FakeWF(&actual, attempt % 2 == 1, no_flush));
+    unique_ptr<FakeWF> wf(new FakeWF(&actual,
+#ifndef ROCKSDB_LITE
+                                     attempt % 2 == 1,
+#else
+                                     false,
+#endif
+                                     no_flush));
     unique_ptr<WritableFileWriter> writer(
         new WritableFileWriter(std::move(wf), env_options));
 
@@ -176,13 +184,13 @@ TEST_F(WritableFileWriterTest, AppendStatusReturn) {
     explicit FakeWF() : use_direct_io_(false), io_error_(false) {}
 
     virtual bool use_direct_io() const override { return use_direct_io_; }
-    Status Append(const Slice& data) override {
+    Status Append(const Slice& /*data*/) override {
       if (io_error_) {
         return Status::IOError("Fake IO error");
       }
       return Status::OK();
     }
-    Status PositionedAppend(const Slice& data, uint64_t) override {
+    Status PositionedAppend(const Slice& /*data*/, uint64_t) override {
       if (io_error_) {
         return Status::IOError("Fake IO error");
       }

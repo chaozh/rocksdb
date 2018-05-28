@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 
 #ifndef ROCKSDB_LITE
@@ -599,8 +597,8 @@ void HashCuckooRep::Iterator::Seek(const Slice& user_key,
 }
 
 // Retreat to the last entry with a key <= target
-void HashCuckooRep::Iterator::SeekForPrev(const Slice& user_key,
-                                          const char* memtable_key) {
+void HashCuckooRep::Iterator::SeekForPrev(const Slice& /*user_key*/,
+                                          const char* /*memtable_key*/) {
   assert(false);
 }
 
@@ -625,7 +623,7 @@ void HashCuckooRep::Iterator::SeekToLast() {
 
 MemTableRep* HashCuckooRepFactory::CreateMemTableRep(
     const MemTableRep::KeyComparator& compare, Allocator* allocator,
-    const SliceTransform* transform, Logger* logger) {
+    const SliceTransform* /*transform*/, Logger* /*logger*/) {
   // The estimated average fullness.  The write performance of any close hash
   // degrades as the fullness of the mem-table increases.  Setting kFullness
   // to a value around 0.7 can better avoid write performance degradation while

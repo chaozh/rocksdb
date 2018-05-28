@@ -1,7 +1,7 @@
 // Copyright (c) 2011-present, Facebook, Inc. All rights reserved.
-// This source code is licensed under the BSD-style license found in the
-// LICENSE file in the root directory of this source tree. An additional grant
-// of patent rights can be found in the PATENTS file in the same directory.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 
 #ifndef ROCKSDB_LITE
 
@@ -23,7 +23,7 @@ namespace {
 std::unordered_map<std::string, std::vector<uint64_t>> hash_map;
 
 uint64_t GetSliceHash(const Slice& s, uint32_t index,
-    uint64_t max_num_buckets) {
+                      uint64_t /*max_num_buckets*/) {
   return hash_map[s.ToString()][index];
 }
 }  // namespace
@@ -49,6 +49,7 @@ class CuckooBuilderTest : public testing::Test {
     uint64_t read_file_size;
     ASSERT_OK(env_->GetFileSize(fname, &read_file_size));
 
+   // @lint-ignore TXT2 T25377293 Grandfathered in
 	  Options options;
 	  options.allow_mmap_reads = true;
 	  ImmutableCFOptions ioptions(options);
@@ -109,7 +110,11 @@ class CuckooBuilderTest : public testing::Test {
           expected_locations.begin();
       if (key_idx == keys.size()) {
         // i is not one of the expected locations. Empty bucket.
-        ASSERT_EQ(read_slice.compare(expected_unused_bucket), 0);
+        if (read_slice.data() == nullptr) {
+          ASSERT_EQ(0, expected_unused_bucket.size());
+        } else {
+          ASSERT_EQ(read_slice.compare(expected_unused_bucket), 0);
+        }
       } else {
         keys_found[key_idx] = true;
         ASSERT_EQ(read_slice.compare(keys[key_idx] + values[key_idx]), 0);
@@ -620,7 +625,7 @@ int main(int argc, char** argv) {
 #else
 #include <stdio.h>
 
-int main(int argc, char** argv) {
+int main(int /*argc*/, char** /*argv*/) {
   fprintf(stderr, "SKIPPED as Cuckoo table is not supported in ROCKSDB_LITE\n");
   return 0;
 }

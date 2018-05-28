@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 /*
   Murmurhash from http://sites.google.com/site/murmurhash/
@@ -22,6 +20,13 @@
 //
 // 64-bit hash for 64-bit platforms
 
+#ifdef ROCKSDB_UBSAN_RUN
+#if defined(__clang__)
+__attribute__((__no_sanitize__("alignment")))
+#elif defined(__GNUC__)
+__attribute__((__no_sanitize_undefined__))
+#endif
+#endif
 uint64_t MurmurHash64A ( const void * key, int len, unsigned int seed )
 {
     const uint64_t m = 0xc6a4a7935bd1e995;
@@ -115,8 +120,8 @@ unsigned int MurmurHash2 ( const void * key, int len, unsigned int seed )
 
     switch(len)
     {
-    case 3: h ^= data[2] << 16;
-    case 2: h ^= data[1] << 8;
+    case 3: h ^= data[2] << 16; // fallthrough
+    case 2: h ^= data[1] << 8; // fallthrough
     case 1: h ^= data[0];
         h *= m;
     };

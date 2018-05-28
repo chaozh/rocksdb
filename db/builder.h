@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
@@ -31,6 +29,7 @@ struct FileMetaData;
 class Env;
 struct EnvOptions;
 class Iterator;
+class SnapshotChecker;
 class TableCache;
 class VersionEdit;
 class TableBuilder;
@@ -44,7 +43,7 @@ class InternalIterator;
 // @param compression_dict Data for presetting the compression library's
 //    dictionary, or nullptr.
 TableBuilder* NewTableBuilder(
-    const ImmutableCFOptions& options,
+    const ImmutableCFOptions& options, const MutableCFOptions& moptions,
     const InternalKeyComparator& internal_comparator,
     const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
         int_tbl_prop_collector_factories,
@@ -52,7 +51,8 @@ TableBuilder* NewTableBuilder(
     WritableFileWriter* file, const CompressionType compression_type,
     const CompressionOptions& compression_opts, int level,
     const std::string* compression_dict = nullptr,
-    const bool skip_filters = false, const uint64_t creation_time = 0);
+    const bool skip_filters = false, const uint64_t creation_time = 0,
+    const uint64_t oldest_key_time = 0);
 
 // Build a Table file from the contents of *iter.  The generated file
 // will be named according to number specified in meta. On success, the rest of
@@ -73,12 +73,13 @@ extern Status BuildTable(
     uint32_t column_family_id, const std::string& column_family_name,
     std::vector<SequenceNumber> snapshots,
     SequenceNumber earliest_write_conflict_snapshot,
-    const CompressionType compression,
+    SnapshotChecker* snapshot_checker, const CompressionType compression,
     const CompressionOptions& compression_opts, bool paranoid_file_checks,
     InternalStats* internal_stats, TableFileCreationReason reason,
     EventLogger* event_logger = nullptr, int job_id = 0,
     const Env::IOPriority io_priority = Env::IO_HIGH,
     TableProperties* table_properties = nullptr, int level = -1,
-    const uint64_t creation_time = 0);
+    const uint64_t creation_time = 0, const uint64_t oldest_key_time = 0,
+    Env::WriteLifeTimeHint write_hint = Env::WLTH_NOT_SET);
 
 }  // namespace rocksdb

@@ -1,7 +1,7 @@
 // Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-// This source code is licensed under the BSD-style license found in the
-// LICENSE file in the root directory of this source tree. An additional grant
-// of patent rights can be found in the PATENTS file in the same directory.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 package org.rocksdb;
 
 import org.junit.ClassRule;
@@ -760,6 +760,30 @@ public class RocksDBTest {
             handle.close();
           }
         }
+      }
+    }
+  }
+
+  @Test
+  public void destroyDB() throws RocksDBException {
+    try (final Options options = new Options().setCreateIfMissing(true)) {
+      String dbPath = dbFolder.getRoot().getAbsolutePath();
+      try (final RocksDB db = RocksDB.open(options, dbPath)) {
+        db.put("key1".getBytes(), "value".getBytes());
+      }
+      assertThat(dbFolder.getRoot().exists()).isTrue();
+      RocksDB.destroyDB(dbPath, options);
+      assertThat(dbFolder.getRoot().exists()).isFalse();
+    }
+  }
+
+  @Test(expected = RocksDBException.class)
+  public void destroyDBFailIfOpen() throws RocksDBException {
+    try (final Options options = new Options().setCreateIfMissing(true)) {
+      String dbPath = dbFolder.getRoot().getAbsolutePath();
+      try (final RocksDB db = RocksDB.open(options, dbPath)) {
+        // Fails as the db is open and locked.
+        RocksDB.destroyDB(dbPath, options);
       }
     }
   }

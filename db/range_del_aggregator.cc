@@ -1,9 +1,7 @@
 //  Copyright (c) 2016-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 
 #include "db/range_del_aggregator.h"
 
@@ -45,11 +43,9 @@ void RangeDelAggregator::InitRep(const std::vector<SequenceNumber>& snapshots) {
   rep_->pinned_iters_mgr_.StartPinning();
 }
 
-bool RangeDelAggregator::ShouldDelete(
+bool RangeDelAggregator::ShouldDeleteImpl(
     const Slice& internal_key, RangeDelAggregator::RangePositioningMode mode) {
-  if (rep_ == nullptr) {
-    return false;
-  }
+  assert(rep_ != nullptr);
   ParsedInternalKey parsed;
   if (!ParseInternalKey(internal_key, &parsed)) {
     assert(false);
@@ -57,13 +53,11 @@ bool RangeDelAggregator::ShouldDelete(
   return ShouldDelete(parsed, mode);
 }
 
-bool RangeDelAggregator::ShouldDelete(
+bool RangeDelAggregator::ShouldDeleteImpl(
     const ParsedInternalKey& parsed,
     RangeDelAggregator::RangePositioningMode mode) {
   assert(IsValueType(parsed.type));
-  if (rep_ == nullptr) {
-    return false;
-  }
+  assert(rep_ != nullptr);
   auto& positional_tombstone_map = GetPositionalTombstoneMap(parsed.sequence);
   const auto& tombstone_map = positional_tombstone_map.raw_map;
   if (tombstone_map.empty()) {
@@ -146,6 +140,29 @@ bool RangeDelAggregator::ShouldDelete(
   return parsed.sequence < tombstone_map_iter->second.seq_;
 }
 
+bool RangeDelAggregator::IsRangeOverlapped(const Slice& start,
+                                           const Slice& end) {
+  // so far only implemented for non-collapsed mode since file ingestion (only
+  //  client) doesn't use collapsing
+  assert(!collapse_deletions_);
+  if (rep_ == nullptr) {
+    return false;
+  }
+  for (const auto& seqnum_and_tombstone_map : rep_->stripe_map_) {
+    for (const auto& start_key_and_tombstone :
+         seqnum_and_tombstone_map.second.raw_map) {
+      const auto& tombstone = start_key_and_tombstone.second;
+      if (icmp_.user_comparator()->Compare(start, tombstone.end_key_) < 0 &&
+          icmp_.user_comparator()->Compare(tombstone.start_key_, end) <= 0 &&
+          icmp_.user_comparator()->Compare(tombstone.start_key_,
+                                           tombstone.end_key_) < 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 bool RangeDelAggregator::ShouldAddTombstones(
     bool bottommost_level /* = false */) {
   // TODO(andrewkr): can we just open a file and throw it away if it ends up
@@ -178,6 +195,10 @@ Status RangeDelAggregator::AddTombstones(
   input->SeekToFirst();
   bool first_iter = true;
   while (input->Valid()) {
+    // The tombstone map holds slices into the iterator's memory. This assert
+    // ensures pinning the iterator also pins the keys/values.
+    assert(input->IsKeyPinned() && input->IsValuePinned());
+
     if (first_iter) {
       if (rep_ == nullptr) {
         InitRep({upper_bound_});
@@ -359,7 +380,8 @@ Status RangeDelAggregator::AddTombstone(RangeTombstone tombstone) {
       ++new_range_dels_iter;
     }
   } else {
-    tombstone_map.emplace(tombstone.start_key_, std::move(tombstone));
+    auto start_key = tombstone.start_key_;
+    tombstone_map.emplace(start_key, std::move(tombstone));
   }
   return Status::OK();
 }
@@ -414,8 +436,8 @@ void RangeDelAggregator::AddToBuilder(
 
   // Note the order in which tombstones are stored is insignificant since we
   // insert them into a std::map on the read path.
-  bool first_added = false;
   while (stripe_map_iter != rep_->stripe_map_.end()) {
+    bool first_added = false;
     for (auto tombstone_map_iter = stripe_map_iter->second.raw_map.begin();
          tombstone_map_iter != stripe_map_iter->second.raw_map.end();
          ++tombstone_map_iter) {
@@ -454,7 +476,7 @@ void RangeDelAggregator::AddToBuilder(
       builder->Add(ikey_and_end_key.first.Encode(), ikey_and_end_key.second);
       if (!first_added) {
         first_added = true;
-        InternalKey smallest_candidate = std::move(ikey_and_end_key.first);;
+        InternalKey smallest_candidate = std::move(ikey_and_end_key.first);
         if (lower_bound != nullptr &&
             icmp_.user_comparator()->Compare(smallest_candidate.user_key(),
                                              *lower_bound) <= 0) {
@@ -516,6 +538,13 @@ bool RangeDelAggregator::IsEmpty() {
     }
   }
   return true;
+}
+
+bool RangeDelAggregator::AddFile(uint64_t file_number) {
+  if (rep_ == nullptr) {
+    return true;
+  }
+  return rep_->added_files_.emplace(file_number).second;
 }
 
 }  // namespace rocksdb

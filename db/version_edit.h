@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -146,6 +144,7 @@ struct FdWithKeyRange {
 
   FdWithKeyRange()
       : fd(),
+        file_metadata(nullptr),
         smallest_key(),
         largest_key() {
   }
@@ -200,6 +199,14 @@ class VersionEdit {
     has_max_column_family_ = true;
     max_column_family_ = max_column_family;
   }
+  void SetMinLogNumberToKeep(uint64_t num) {
+    has_min_log_number_to_keep_ = true;
+    min_log_number_to_keep_ = num;
+  }
+
+  bool has_log_number() { return has_log_number_; }
+
+  uint64_t log_number() { return log_number_; }
 
   // Add the specified file at the specified number.
   // REQUIRES: This version has not been saved (see VersionSet::SaveTo)
@@ -286,6 +293,8 @@ class VersionEdit {
   uint64_t prev_log_number_;
   uint64_t next_file_number_;
   uint32_t max_column_family_;
+  // The most recent WAL log number that is deleted
+  uint64_t min_log_number_to_keep_;
   SequenceNumber last_sequence_;
   bool has_comparator_;
   bool has_log_number_;
@@ -293,6 +302,7 @@ class VersionEdit {
   bool has_next_file_number_;
   bool has_last_sequence_;
   bool has_max_column_family_;
+  bool has_min_log_number_to_keep_;
 
   DeletedFileSet deleted_files_;
   std::vector<std::pair<int, FileMetaData>> new_files_;

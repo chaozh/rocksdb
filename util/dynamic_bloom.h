@@ -1,7 +1,7 @@
 // Copyright (c) 2011-present, Facebook, Inc. All rights reserved.
-// This source code is licensed under the BSD-style license found in the
-// LICENSE file in the root directory of this source tree. An additional grant
-// of patent rights can be found in the PATENTS file in the same directory.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 
 #pragma once
 
@@ -125,12 +125,20 @@ inline bool DynamicBloom::MayContain(const Slice& key) const {
   return (MayContainHash(hash_func_(key)));
 }
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+// local variable is initialized but not referenced
+#pragma warning(disable : 4189) 
+#endif
 inline void DynamicBloom::Prefetch(uint32_t h) {
   if (kNumBlocks != 0) {
     uint32_t b = ((h >> 11 | (h << 21)) % kNumBlocks) * (CACHE_LINE_SIZE * 8);
     PREFETCH(&(data_[b / 8]), 0, 3);
   }
 }
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 inline bool DynamicBloom::MayContainHash(uint32_t h) const {
   assert(IsInitialized());

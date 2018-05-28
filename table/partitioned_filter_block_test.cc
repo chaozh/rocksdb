@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 
 #include <map>
 
@@ -24,11 +22,15 @@ std::map<uint64_t, Slice> slices;
 
 class MockedBlockBasedTable : public BlockBasedTable {
  public:
-  explicit MockedBlockBasedTable(Rep* rep) : BlockBasedTable(rep) {}
+  explicit MockedBlockBasedTable(Rep* rep) : BlockBasedTable(rep) {
+    // Initialize what Open normally does as much as necessary for the test
+    rep->cache_key_prefix_size = 10;
+  }
 
   virtual CachableEntry<FilterBlockReader> GetFilter(
-      const BlockHandle& filter_blk_handle, const bool is_a_filter_partition,
-      bool no_io) const override {
+      FilePrefetchBuffer*, const BlockHandle& filter_blk_handle,
+      const bool /* unused */, bool /* unused */, GetContext* /* unused */,
+      const SliceTransform* /* unused */) const override {
     Slice slice = slices[filter_blk_handle.offset()];
     auto obj = new FullFilterBlockReader(
         nullptr, true, BlockContents(slice, false, kNoCompression),
@@ -74,7 +76,8 @@ class PartitionedFilterBlockTest : public testing::Test {
     auto partition_size =
         filter_bits_reader->CalculateSpace(num_keys, &dont_care1, &dont_care2);
     delete filter_bits_reader;
-    return partition_size + table_options_.block_size_deviation;
+    return partition_size +
+               partition_size * table_options_.block_size_deviation / 100;
   }
 
   int last_offset = 10;
@@ -92,10 +95,12 @@ class PartitionedFilterBlockTest : public testing::Test {
   PartitionedFilterBlockBuilder* NewBuilder(
       PartitionedIndexBuilder* const p_index_builder) {
     assert(table_options_.block_size_deviation <= 100);
-    auto partition_size = static_cast<const uint32_t>(
-        table_options_.metadata_block_size *
-        (100 - table_options_.block_size_deviation));
-    partition_size = std::max(partition_size, static_cast<const uint32_t>(1));
+    auto partition_size = static_cast<uint32_t>(
+             ((table_options_.metadata_block_size *
+               (100 - table_options_.block_size_deviation)) +
+              99) /
+             100);
+    partition_size = std::max(partition_size, static_cast<uint32_t>(1));
     return new PartitionedFilterBlockBuilder(
         nullptr, table_options_.whole_key_filtering,
         table_options_.filter_policy->GetFilterBitsBuilder(),
@@ -116,6 +121,7 @@ class PartitionedFilterBlockTest : public testing::Test {
     } while (status.IsIncomplete());
     const Options options;
     const ImmutableCFOptions ioptions(options);
+    const MutableCFOptions moptions(options);
     const EnvOptions env_options;
     table.reset(new MockedBlockBasedTable(new BlockBasedTable::Rep(
         ioptions, env_options, table_options_, icomp, false)));
@@ -133,23 +139,27 @@ class PartitionedFilterBlockTest : public testing::Test {
     for (auto key : keys) {
       auto ikey = InternalKey(key, 0, ValueType::kTypeValue);
       const Slice ikey_slice = Slice(*ikey.rep());
-      ASSERT_TRUE(reader->KeyMayMatch(key, kNotValid, !no_io, &ikey_slice));
+      ASSERT_TRUE(
+          reader->KeyMayMatch(key, nullptr, kNotValid, !no_io, &ikey_slice));
     }
     {
       // querying a key twice
       auto ikey = InternalKey(keys[0], 0, ValueType::kTypeValue);
       const Slice ikey_slice = Slice(*ikey.rep());
-      ASSERT_TRUE(reader->KeyMayMatch(keys[0], kNotValid, !no_io, &ikey_slice));
+      ASSERT_TRUE(reader->KeyMayMatch(keys[0], nullptr, kNotValid, !no_io,
+                                      &ikey_slice));
     }
     // querying missing keys
     for (auto key : missing_keys) {
       auto ikey = InternalKey(key, 0, ValueType::kTypeValue);
       const Slice ikey_slice = Slice(*ikey.rep());
       if (empty) {
-        ASSERT_TRUE(reader->KeyMayMatch(key, kNotValid, !no_io, &ikey_slice));
+        ASSERT_TRUE(
+            reader->KeyMayMatch(key, nullptr, kNotValid, !no_io, &ikey_slice));
       } else {
         // assuming a good hash function
-        ASSERT_FALSE(reader->KeyMayMatch(key, kNotValid, !no_io, &ikey_slice));
+        ASSERT_FALSE(
+            reader->KeyMayMatch(key, nullptr, kNotValid, !no_io, &ikey_slice));
       }
     }
   }

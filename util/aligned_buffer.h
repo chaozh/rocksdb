@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -24,6 +22,8 @@ inline size_t TruncateToPageBoundary(size_t page_size, size_t s) {
 inline size_t Roundup(size_t x, size_t y) {
   return ((x + y - 1) / y) * y;
 }
+
+inline size_t Rounddown(size_t x, size_t y) { return (x / y) * y; }
 
 // This class is to manage an aligned user
 // allocated buffer for direct I/O purposes
@@ -159,6 +159,12 @@ public:
       memset(bufstart_ + cursize_, padding, pad_size);
       cursize_ += pad_size;
     }
+  }
+
+  void PadWith(size_t pad_size, int padding) {
+    assert((pad_size + cursize_) <= capacity_);
+    memset(bufstart_ + cursize_, padding, pad_size);
+    cursize_ += pad_size;
   }
 
   // After a partial flush move the tail to the beginning of the buffer

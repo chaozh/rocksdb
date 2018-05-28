@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -22,6 +20,19 @@ Cleanable::Cleanable() {
 }
 
 Cleanable::~Cleanable() { DoCleanup(); }
+
+Cleanable::Cleanable(Cleanable&& other) {
+  *this = std::move(other);
+}
+
+Cleanable& Cleanable::operator=(Cleanable&& other) {
+  if (this != &other) {
+    cleanup_ = other.cleanup_;
+    other.cleanup_.function = nullptr;
+    other.cleanup_.next = nullptr;
+  }
+  return *this;
+}
 
 // If the entire linked list was on heap we could have simply add attach one
 // link list to another. However the head is an embeded object to avoid the cost
@@ -100,8 +111,8 @@ class EmptyIterator : public Iterator {
  public:
   explicit EmptyIterator(const Status& s) : status_(s) { }
   virtual bool Valid() const override { return false; }
-  virtual void Seek(const Slice& target) override {}
-  virtual void SeekForPrev(const Slice& target) override {}
+  virtual void Seek(const Slice& /*target*/) override {}
+  virtual void SeekForPrev(const Slice& /*target*/) override {}
   virtual void SeekToFirst() override {}
   virtual void SeekToLast() override {}
   virtual void Next() override { assert(false); }
@@ -124,8 +135,8 @@ class EmptyInternalIterator : public InternalIterator {
  public:
   explicit EmptyInternalIterator(const Status& s) : status_(s) {}
   virtual bool Valid() const override { return false; }
-  virtual void Seek(const Slice& target) override {}
-  virtual void SeekForPrev(const Slice& target) override {}
+  virtual void Seek(const Slice& /*target*/) override {}
+  virtual void SeekForPrev(const Slice& /*target*/) override {}
   virtual void SeekToFirst() override {}
   virtual void SeekToLast() override {}
   virtual void Next() override { assert(false); }

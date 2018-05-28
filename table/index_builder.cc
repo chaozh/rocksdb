@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -30,26 +28,30 @@ IndexBuilder* IndexBuilder::CreateIndexBuilder(
     const InternalKeyComparator* comparator,
     const InternalKeySliceTransform* int_key_slice_transform,
     const BlockBasedTableOptions& table_opt) {
+  IndexBuilder* result = nullptr;
   switch (index_type) {
     case BlockBasedTableOptions::kBinarySearch: {
-      return new ShortenedIndexBuilder(comparator,
-                                       table_opt.index_block_restart_interval);
+      result = new ShortenedIndexBuilder(comparator,
+                                         table_opt.index_block_restart_interval,
+                                         table_opt.format_version);
     }
+  break;
     case BlockBasedTableOptions::kHashSearch: {
-      return new HashIndexBuilder(comparator, int_key_slice_transform,
-                                  table_opt.index_block_restart_interval);
+      result = new HashIndexBuilder(comparator, int_key_slice_transform,
+                                    table_opt.index_block_restart_interval,
+                                    table_opt.format_version);
     }
+  break;
     case BlockBasedTableOptions::kTwoLevelIndexSearch: {
-      return PartitionedIndexBuilder::CreateIndexBuilder(comparator, table_opt);
+      result = PartitionedIndexBuilder::CreateIndexBuilder(comparator, table_opt);
     }
+    break;
     default: {
       assert(!"Do not recognize the index type ");
-      return nullptr;
     }
+  break;
   }
-  // impossible.
-  assert(false);
-  return nullptr;
+  return result;
 }
 
 PartitionedIndexBuilder* PartitionedIndexBuilder::CreateIndexBuilder(
@@ -62,9 +64,11 @@ PartitionedIndexBuilder::PartitionedIndexBuilder(
     const InternalKeyComparator* comparator,
     const BlockBasedTableOptions& table_opt)
     : IndexBuilder(comparator),
-      index_block_builder_(table_opt.index_block_restart_interval),
+      index_block_builder_(table_opt.index_block_restart_interval,
+                           table_opt.format_version),
       sub_index_builder_(nullptr),
-      table_opt_(table_opt) {}
+      table_opt_(table_opt),
+      seperator_is_key_plus_seq_(false) {}
 
 PartitionedIndexBuilder::~PartitionedIndexBuilder() {
   delete sub_index_builder_;
@@ -73,7 +77,8 @@ PartitionedIndexBuilder::~PartitionedIndexBuilder() {
 void PartitionedIndexBuilder::MakeNewSubIndexBuilder() {
   assert(sub_index_builder_ == nullptr);
   sub_index_builder_ = new ShortenedIndexBuilder(
-      comparator_, table_opt_.index_block_restart_interval);
+      comparator_, table_opt_.index_block_restart_interval,
+      table_opt_.format_version);
   flush_policy_.reset(FlushBlockBySizePolicyFactory::NewFlushBlockPolicy(
       table_opt_.metadata_block_size, table_opt_.block_size_deviation,
       sub_index_builder_->index_block_builder_));
@@ -95,6 +100,10 @@ void PartitionedIndexBuilder::AddIndexEntry(
     }
     sub_index_builder_->AddIndexEntry(last_key_in_current_block,
                                       first_key_in_next_block, block_handle);
+    if (sub_index_builder_->seperator_is_key_plus_seq_) {
+      // then we need to apply it to all sub-index builders
+      seperator_is_key_plus_seq_ = true;
+    }
     sub_index_last_key_ = std::string(*last_key_in_current_block);
     entries_.push_back(
         {sub_index_last_key_,
@@ -123,6 +132,10 @@ void PartitionedIndexBuilder::AddIndexEntry(
     sub_index_builder_->AddIndexEntry(last_key_in_current_block,
                                       first_key_in_next_block, block_handle);
     sub_index_last_key_ = std::string(*last_key_in_current_block);
+    if (sub_index_builder_->seperator_is_key_plus_seq_) {
+      // then we need to apply it to all sub-index builders
+      seperator_is_key_plus_seq_ = true;
+    }
   }
 }
 
@@ -146,6 +159,8 @@ Status PartitionedIndexBuilder::Finish(
     // Finish the next partition index in line and Incomplete() to indicate we
     // expect more calls to Finish
     Entry& entry = entries_.front();
+    // Apply the policy to all sub-indexes
+    entry.value->seperator_is_key_plus_seq_ = seperator_is_key_plus_seq_;
     auto s = entry.value->Finish(index_blocks);
     finishing_indexes = true;
     return s.ok() ? Status::Incomplete() : s;

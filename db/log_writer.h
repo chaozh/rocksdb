@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -51,7 +49,7 @@ namespace log {
  * |CRC (4B) | Size (2B) | Type (1B) | Payload   |
  * +---------+-----------+-----------+--- ... ---+
  *
- * CRC = 32bit hash computed over the payload using CRC
+ * CRC = 32bit hash computed over the record type and payload using CRC
  * Size = Length of the payload data
  * Type = Type of record
  *        (kZeroType, kFullType, kFirstType, kLastType, kMiddleType )
@@ -86,6 +84,8 @@ class Writer {
   uint64_t get_log_number() const { return log_number_; }
 
   Status WriteBuffer();
+
+  bool TEST_BufferIsEmpty();
 
  private:
   unique_ptr<WritableFileWriter> dest_;

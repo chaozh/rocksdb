@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -47,7 +45,7 @@ class RateLimiter {
   // Request for token for bytes. If this request can not be satisfied, the call
   // is blocked. Caller is responsible to make sure
   // bytes <= GetSingleBurstBytes()
-  virtual void Request(const int64_t bytes, const Env::IOPriority pri) {
+  virtual void Request(const int64_t /*bytes*/, const Env::IOPriority /*pri*/) {
     assert(false);
   }
 
@@ -129,9 +127,13 @@ class RateLimiter {
 // 1/fairness chance even though high-pri requests exist to avoid starvation.
 // You should be good by leaving it at default 10.
 // @mode: Mode indicates which types of operations count against the limit.
+// @auto_tuned: Enables dynamic adjustment of rate limit within the range
+//              `[rate_bytes_per_sec / 20, rate_bytes_per_sec]`, according to
+//              the recent demand for background I/O.
 extern RateLimiter* NewGenericRateLimiter(
     int64_t rate_bytes_per_sec, int64_t refill_period_us = 100 * 1000,
     int32_t fairness = 10,
-    RateLimiter::Mode mode = RateLimiter::Mode::kWritesOnly);
+    RateLimiter::Mode mode = RateLimiter::Mode::kWritesOnly,
+    bool auto_tuned = false);
 
 }  // namespace rocksdb

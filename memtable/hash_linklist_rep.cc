@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 
 #ifndef ROCKSDB_LITE
@@ -364,14 +362,14 @@ class HashLinkListRep : public MemTableRep {
 
     // Advance to the first entry with a key >= target
     virtual void Seek(const Slice& internal_key,
-                      const char* memtable_key) override {
+                      const char* /*memtable_key*/) override {
       node_ = hash_link_list_rep_->FindGreaterOrEqualInBucket(head_,
                                                               internal_key);
     }
 
     // Retreat to the last entry with a key <= target
-    virtual void SeekForPrev(const Slice& internal_key,
-                             const char* memtable_key) override {
+    virtual void SeekForPrev(const Slice& /*internal_key*/,
+                             const char* /*memtable_key*/) override {
       // Since we do not support Prev()
       // We simply do not support SeekForPrev
       Reset(nullptr);
@@ -485,10 +483,10 @@ class HashLinkListRep : public MemTableRep {
     }
     virtual void Next() override {}
     virtual void Prev() override {}
-    virtual void Seek(const Slice& user_key,
-                      const char* memtable_key) override {}
-    virtual void SeekForPrev(const Slice& user_key,
-                             const char* memtable_key) override {}
+    virtual void Seek(const Slice& /*user_key*/,
+                      const char* /*memtable_key*/) override {}
+    virtual void SeekForPrev(const Slice& /*user_key*/,
+                             const char* /*memtable_key*/) override {}
     virtual void SeekToFirst() override {}
     virtual void SeekToLast() override {}
 

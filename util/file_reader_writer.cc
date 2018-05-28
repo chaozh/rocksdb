@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -90,7 +88,7 @@ Status RandomAccessFileReader::Read(uint64_t offset, size_t n, Slice* result,
       buf.AllocateNewBuffer(read_size);
       while (buf.CurrentSize() < read_size) {
         size_t allowed;
-        if (rate_limiter_ != nullptr) {
+        if (for_compaction_ && rate_limiter_ != nullptr) {
           allowed = rate_limiter_->RequestToken(
               buf.Capacity() - buf.CurrentSize(), buf.Alignment(),
               Env::IOPriority::IO_LOW, stats_, RateLimiter::OpType::kRead);
@@ -221,6 +219,31 @@ Status WritableFileWriter::Append(const Slice& data) {
   return s;
 }
 
+Status WritableFileWriter::Pad(const size_t pad_bytes) {
+  assert(pad_bytes < kDefaultPageSize);
+  size_t left = pad_bytes;
+  size_t cap = buf_.Capacity() - buf_.CurrentSize();
+
+  // Assume pad_bytes is small compared to buf_ capacity. So we always
+  // use buf_ rather than write directly to file in certain cases like
+  // Append() does.
+  while (left) {
+    size_t append_bytes = std::min(cap, left);
+    buf_.PadWith(append_bytes, 0);
+    left -= append_bytes;
+    if (left > 0) {
+      Status s = Flush();
+      if (!s.ok()) {
+        return s;
+      }
+    }
+    cap = buf_.Capacity() - buf_.CurrentSize();
+  }
+  pending_sync_ = true;
+  filesize_ += pad_bytes;
+  return Status::OK();
+}
+
 Status WritableFileWriter::Close() {
 
   // Do not quit immediately on failure the file MUST be closed
@@ -241,6 +264,9 @@ Status WritableFileWriter::Close() {
   // we need to let the file know where data ends.
   if (use_direct_io()) {
     interim = writable_file_->Truncate(filesize_);
+    if (interim.ok()) {
+      interim = writable_file_->Fsync();
+    }
     if (!interim.ok() && s.ok()) {
       s = interim;
     }
@@ -515,7 +541,7 @@ class ReadaheadRandomAccessFile : public RandomAccessFile {
       *result = Slice(scratch, cached_len);
       return Status::OK();
     }
-    size_t advanced_offset = offset + cached_len;
+    size_t advanced_offset = static_cast<size_t>(offset + cached_len);
     // In the case of cache hit advanced_offset is already aligned, means that
     // chunk_offset equals to advanced_offset
     size_t chunk_offset = TruncateToPageBoundary(alignment_, advanced_offset);
@@ -543,12 +569,18 @@ class ReadaheadRandomAccessFile : public RandomAccessFile {
   }
 
   virtual Status Prefetch(uint64_t offset, size_t n) override {
-    size_t prefetch_offset = TruncateToPageBoundary(alignment_, offset);
+    if (n < readahead_size_) {
+      // Don't allow smaller prefetches than the configured `readahead_size_`.
+      // `Read()` assumes a smaller prefetch buffer indicates EOF was reached.
+      return Status::OK();
+    }
+    size_t offset_ = static_cast<size_t>(offset);
+    size_t prefetch_offset = TruncateToPageBoundary(alignment_, offset_);
     if (prefetch_offset == buffer_offset_) {
       return Status::OK();
     }
     return ReadIntoBuffer(prefetch_offset,
-                          Roundup(offset + n, alignment_) - prefetch_offset);
+                          Roundup(offset_ + n, alignment_) - prefetch_offset);
   }
 
   virtual size_t GetUniqueId(char* id, size_t max_size) const override {
@@ -590,6 +622,7 @@ class ReadaheadRandomAccessFile : public RandomAccessFile {
     if (s.ok()) {
       buffer_offset_ = offset;
       buffer_len_ = result.size();
+      assert(buffer_.BufferStart() == result.data());
     }
     return s;
   }
@@ -604,6 +637,38 @@ class ReadaheadRandomAccessFile : public RandomAccessFile {
   mutable size_t buffer_len_;
 };
 }  // namespace
+
+Status FilePrefetchBuffer::Prefetch(RandomAccessFileReader* reader,
+                                    uint64_t offset, size_t n) {
+  size_t alignment = reader->file()->GetRequiredBufferAlignment();
+  size_t offset_ = static_cast<size_t>(offset);
+  uint64_t rounddown_offset = Rounddown(offset_, alignment);
+  uint64_t roundup_end = Roundup(offset_ + n, alignment);
+  uint64_t roundup_len = roundup_end - rounddown_offset;
+  assert(roundup_len >= alignment);
+  assert(roundup_len % alignment == 0);
+  buffer_.Alignment(alignment);
+  buffer_.AllocateNewBuffer(static_cast<size_t>(roundup_len));
+
+  Slice result;
+  Status s = reader->Read(rounddown_offset, static_cast<size_t>(roundup_len),
+                          &result, buffer_.BufferStart());
+  if (s.ok()) {
+    buffer_offset_ = rounddown_offset;
+    buffer_len_ = result.size();
+  }
+  return s;
+}
+
+bool FilePrefetchBuffer::TryReadFromCache(uint64_t offset, size_t n,
+                                          Slice* result) const {
+  if (offset < buffer_offset_ || offset + n > buffer_offset_ + buffer_len_) {
+    return false;
+  }
+  uint64_t offset_in_buffer = offset - buffer_offset_;
+  *result = Slice(buffer_.BufferStart() + offset_in_buffer, n);
+  return true;
+}
 
 std::unique_ptr<RandomAccessFile> NewReadaheadRandomAccessFile(
     std::unique_ptr<RandomAccessFile>&& file, size_t readahead_size) {

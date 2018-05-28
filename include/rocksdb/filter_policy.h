@@ -1,7 +1,7 @@
 // Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-// This source code is licensed under the BSD-style license found in the
-// LICENSE file in the root directory of this source tree. An additional grant
-// of patent rights can be found in the PATENTS file in the same directory.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 // Copyright (c) 2012 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
@@ -22,6 +22,7 @@
 
 #include <memory>
 #include <stdexcept>
+#include <stdlib.h>
 #include <string>
 #include <vector>
 
@@ -45,7 +46,11 @@ class FilterBitsBuilder {
   virtual Slice Finish(std::unique_ptr<const char[]>* buf) = 0;
 
   // Calculate num of entries fit into a space.
-  virtual int CalculateNumEntry(const uint32_t space) {
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4702) // unreachable code
+#endif
+  virtual int CalculateNumEntry(const uint32_t /*space*/) {
 #ifndef ROCKSDB_LITE
     throw std::runtime_error("CalculateNumEntry not Implemented");
 #else
@@ -53,6 +58,9 @@ class FilterBitsBuilder {
 #endif
     return 0;
   }
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 };
 
 // A class that checks if a key can be in filter
@@ -114,7 +122,8 @@ class FilterPolicy {
   // Get the FilterBitsReader, which is ONLY used for full filter block
   // It contains interface to tell if key can be in filter
   // The input slice should NOT be deleted by FilterPolicy
-  virtual FilterBitsReader* GetFilterBitsReader(const Slice& contents) const {
+  virtual FilterBitsReader* GetFilterBitsReader(
+      const Slice& /*contents*/) const {
     return nullptr;
   }
 };

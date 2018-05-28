@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -62,6 +60,8 @@ WriteBufferManager::WriteBufferManager(size_t _buffer_size,
     // Construct the cache key using the pointer to this.
     cache_rep_.reset(new CacheRep(cache));
   }
+#else
+  (void)cache;
 #endif  // ROCKSDB_LITE
 }
 
@@ -94,6 +94,8 @@ void WriteBufferManager::ReserveMemWithCache(size_t mem) {
     cache_rep_->dummy_handles_.push_back(handle);
     cache_rep_->cache_allocated_size_ += kSizeDummyEntry;
   }
+#else
+  (void)mem;
 #endif  // ROCKSDB_LITE
 }
 
@@ -121,6 +123,8 @@ void WriteBufferManager::FreeMemWithCache(size_t mem) {
     cache_rep_->dummy_handles_.pop_back();
     cache_rep_->cache_allocated_size_ -= kSizeDummyEntry;
   }
+#else
+  (void)mem;
 #endif  // ROCKSDB_LITE
 }
 }  // namespace rocksdb

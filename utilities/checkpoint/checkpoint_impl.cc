@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2012 Facebook.
 // Use of this source code is governed by a BSD-style license that can be
@@ -39,8 +37,8 @@ Status Checkpoint::Create(DB* db, Checkpoint** checkpoint_ptr) {
   return Status::OK();
 }
 
-Status Checkpoint::CreateCheckpoint(const std::string& checkpoint_dir,
-                                    uint64_t log_size_for_flush) {
+Status Checkpoint::CreateCheckpoint(const std::string& /*checkpoint_dir*/,
+                                    uint64_t /*log_size_for_flush*/) {
   return Status::NotSupported("");
 }
 
@@ -61,7 +59,22 @@ Status CheckpointImpl::CreateCheckpoint(const std::string& checkpoint_dir,
       db_options.info_log,
       "Started the snapshot process -- creating snapshot in directory %s",
       checkpoint_dir.c_str());
-  std::string full_private_path = checkpoint_dir + ".tmp";
+
+  size_t final_nonslash_idx = checkpoint_dir.find_last_not_of('/');
+  if (final_nonslash_idx == std::string::npos) {
+    // npos means it's only slashes or empty. Non-empty means it's the root
+    // directory, but it shouldn't be because we verified above the directory
+    // doesn't exist.
+    assert(checkpoint_dir.empty());
+    return Status::InvalidArgument("invalid checkpoint directory name");
+  }
+
+  std::string full_private_path =
+      checkpoint_dir.substr(0, final_nonslash_idx + 1) + ".tmp";
+  ROCKS_LOG_INFO(
+      db_options.info_log,
+      "Snapshot process -- using temporary directory %s",
+      full_private_path.c_str());
   // create snapshot directory
   s = db_->GetEnv()->CreateDir(full_private_path);
   uint64_t sequence_number = 0;

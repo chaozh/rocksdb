@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -15,6 +13,7 @@
 #include "rocksdb/env.h"
 #include "rocksdb/rate_limiter.h"
 #include "util/aligned_buffer.h"
+#include "util/sync_point.h"
 
 namespace rocksdb {
 
@@ -153,6 +152,8 @@ class WritableFileWriter {
         bytes_per_sync_(options.bytes_per_sync),
         rate_limiter_(options.rate_limiter),
         stats_(stats) {
+    TEST_SYNC_POINT_CALLBACK("WritableFileWriter::WritableFileWriter:0",
+                             reinterpret_cast<void*>(max_buffer_size_));
     buf_.Alignment(writable_file_->GetRequiredBufferAlignment());
     buf_.AllocateNewBuffer(std::min((size_t)65536, max_buffer_size_));
   }
@@ -164,6 +165,8 @@ class WritableFileWriter {
   ~WritableFileWriter() { Close(); }
 
   Status Append(const Slice& data);
+
+  Status Pad(const size_t pad_bytes);
 
   Status Flush();
 
@@ -186,6 +189,8 @@ class WritableFileWriter {
 
   bool use_direct_io() { return writable_file_->use_direct_io(); }
 
+  bool TEST_BufferIsEmpty() { return buf_.CurrentSize() == 0; }
+
  private:
   // Used when os buffering is OFF and we are writing
   // DMA such as in Direct I/O mode
@@ -196,6 +201,18 @@ class WritableFileWriter {
   Status WriteBuffered(const char* data, size_t size);
   Status RangeSync(uint64_t offset, uint64_t nbytes);
   Status SyncInternal(bool use_fsync);
+};
+
+class FilePrefetchBuffer {
+ public:
+  FilePrefetchBuffer() : buffer_offset_(0), buffer_len_(0) {}
+  Status Prefetch(RandomAccessFileReader* reader, uint64_t offset, size_t n);
+  bool TryReadFromCache(uint64_t offset, size_t n, Slice* result) const;
+
+ private:
+  AlignedBuffer buffer_;
+  uint64_t buffer_offset_;
+  size_t buffer_len_;
 };
 
 extern Status NewWritableFile(Env* env, const std::string& fname,

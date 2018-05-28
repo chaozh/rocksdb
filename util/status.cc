@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -17,9 +15,18 @@
 namespace rocksdb {
 
 const char* Status::CopyState(const char* state) {
+  const size_t cch =
+      std::strlen(state) + 1; // +1 for the null terminator
   char* const result =
-      new char[std::strlen(state) + 1];  // +1 for the null terminator
-  std::strcpy(result, state);
+      new char[cch];
+  result[cch - 1] = '\0';
+#ifdef OS_WIN
+  errno_t ret;
+  ret = strncpy_s(result, cch, state, cch - 1);
+  assert(ret == 0);
+#else
+  std::strncpy(result, state, cch - 1);
+#endif
   return result;
 }
 

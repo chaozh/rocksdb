@@ -1,7 +1,7 @@
 // Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-// This source code is licensed under the BSD-style license found in the
-// LICENSE file in the root directory of this source tree. An additional grant
-// of patent rights can be found in the PATENTS file in the same directory.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
@@ -58,7 +58,8 @@ class Status {
     kAborted = 10,
     kBusy = 11,
     kExpired = 12,
-    kTryAgain = 13
+    kTryAgain = 13,
+    kCompactionTooLarge = 14
   };
 
   Code code() const { return code_; }
@@ -162,6 +163,14 @@ class Status {
     return Status(kTryAgain, msg, msg2);
   }
 
+  static Status CompactionTooLarge(SubCode msg = kNone) {
+    return Status(kCompactionTooLarge, msg);
+  }
+  static Status CompactionTooLarge(const Slice& msg,
+                                   const Slice& msg2 = Slice()) {
+    return Status(kCompactionTooLarge, msg, msg2);
+  }
+
   static Status NoSpace() { return Status(kIOError, kNoSpace); }
   static Status NoSpace(const Slice& msg, const Slice& msg2 = Slice()) {
     return Status(kIOError, kNoSpace, msg, msg2);
@@ -220,6 +229,9 @@ class Status {
   // This usually means that the operation failed, but may succeed if
   // re-attempted.
   bool IsTryAgain() const { return code() == kTryAgain; }
+
+  // Returns true iff the status indicates the proposed compaction is too large
+  bool IsCompactionTooLarge() const { return code() == kCompactionTooLarge; }
 
   // Returns true iff the status indicates a NoSpace error
   // This is caused by an I/O error returning the specific "out of space"

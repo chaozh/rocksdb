@@ -1,7 +1,7 @@
 // Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-// This source code is licensed under the BSD-style license found in the
-// LICENSE file in the root directory of this source tree. An additional grant
-// of patent rights can be found in the PATENTS file in the same directory.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 
 #ifndef STORAGE_ROCKSDB_INCLUDE_MERGE_OPERATOR_H_
 #define STORAGE_ROCKSDB_INCLUDE_MERGE_OPERATOR_H_
@@ -66,11 +66,9 @@ class MergeOperator {
   // internal corruption. This will be treated as an error by the library.
   //
   // Also make use of the *logger for error messages.
-  virtual bool FullMerge(const Slice& key,
-                         const Slice* existing_value,
-                         const std::deque<std::string>& operand_list,
-                         std::string* new_value,
-                         Logger* logger) const {
+  virtual bool FullMerge(const Slice& /*key*/, const Slice* /*existing_value*/,
+                         const std::deque<std::string>& /*operand_list*/,
+                         std::string* /*new_value*/, Logger* /*logger*/) const {
     // deprecated, please use FullMergeV2()
     assert(false);
     return false;
@@ -89,7 +87,7 @@ class MergeOperator {
     // The key associated with the merge operation.
     const Slice& key;
     // The existing value of the current key, nullptr means that the
-    // value dont exist.
+    // value doesn't exist.
     const Slice* existing_value;
     // A list of operands to apply.
     const std::vector<Slice>& operand_list;
@@ -145,9 +143,10 @@ class MergeOperator {
   // If there is corruption in the data, handle it in the FullMergeV2() function
   // and return false there.  The default implementation of PartialMerge will
   // always return false.
-  virtual bool PartialMerge(const Slice& key, const Slice& left_operand,
-                            const Slice& right_operand, std::string* new_value,
-                            Logger* logger) const {
+  virtual bool PartialMerge(const Slice& /*key*/, const Slice& /*left_operand*/,
+                            const Slice& /*right_operand*/,
+                            std::string* /*new_value*/,
+                            Logger* /*logger*/) const {
     return false;
   }
 
@@ -183,6 +182,22 @@ class MergeOperator {
   //       no checking is enforced. Client is responsible for providing
   //       consistent MergeOperator between DB opens.
   virtual const char* Name() const = 0;
+
+  // Determines whether the MergeOperator can be called with just a single
+  // merge operand.
+  // Override and return true for allowing a single operand. Both FullMergeV2
+  // and PartialMerge/PartialMergeMulti should be overridden and implemented
+  // correctly to handle a single operand.
+  virtual bool AllowSingleOperand() const { return false; }
+
+  // Allows to control when to invoke a full merge during Get.
+  // This could be used to limit the number of merge operands that are looked at
+  // during a point lookup, thereby helping in limiting the number of levels to
+  // read from.
+  // Doesn't help with iterators.
+  virtual bool ShouldMerge(const std::vector<Slice>& /*operands*/) const {
+    return false;
+  }
 };
 
 // The simpler, associative merge operator.

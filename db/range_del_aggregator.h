@@ -1,13 +1,12 @@
 //  Copyright (c) 2016-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 
 #pragma once
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -76,9 +75,33 @@ class RangeDelAggregator {
   //             the deletion whose interval contains this key. Otherwise, its
   //             value must be kFullScan indicating linear scan from beginning..
   bool ShouldDelete(const ParsedInternalKey& parsed,
-                    RangePositioningMode mode = kFullScan);
+                    RangePositioningMode mode = kFullScan) {
+    if (rep_ == nullptr) {
+      return false;
+    }
+    return ShouldDeleteImpl(parsed, mode);
+  }
   bool ShouldDelete(const Slice& internal_key,
-                    RangePositioningMode mode = kFullScan);
+                    RangePositioningMode mode = kFullScan) {
+    if (rep_ == nullptr) {
+      return false;
+    }
+    return ShouldDeleteImpl(internal_key, mode);
+  }
+  bool ShouldDeleteImpl(const ParsedInternalKey& parsed,
+                        RangePositioningMode mode = kFullScan);
+  bool ShouldDeleteImpl(const Slice& internal_key,
+                        RangePositioningMode mode = kFullScan);
+
+  // Checks whether range deletions cover any keys between `start` and `end`,
+  // inclusive.
+  //
+  // @param start User key representing beginning of range to check for overlap.
+  // @param end User key representing end of range to check for overlap. This
+  //     argument is inclusive, so the existence of a range deletion covering
+  //     `end` causes this to return true.
+  bool IsRangeOverlapped(const Slice& start, const Slice& end);
+
   bool ShouldAddTombstones(bool bottommost_level = false);
 
   // Adds tombstones to the tombstone aggregation structure maintained by this
@@ -118,6 +141,7 @@ class RangeDelAggregator {
                     CompactionIterationStats* range_del_out_stats = nullptr,
                     bool bottommost_level = false);
   bool IsEmpty();
+  bool AddFile(uint64_t file_number);
 
  private:
   // Maps tombstone user start key -> tombstone object
@@ -144,6 +168,7 @@ class RangeDelAggregator {
   struct Rep {
     StripeMap stripe_map_;
     PinnedIteratorsManager pinned_iters_mgr_;
+    std::set<uint64_t> added_files_;
   };
   // Initializes rep_ lazily. This aggregator object is constructed for every
   // read, so expensive members should only be created when necessary, i.e.,

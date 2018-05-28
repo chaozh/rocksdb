@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 
 #pragma once
 
@@ -35,6 +33,8 @@ class PartitionedFilterBlockBuilder : public FullFilterBlockBuilder {
 
   void AddKey(const Slice& key) override;
 
+  size_t NumAdded() const override { return num_added_; }
+
   virtual Slice Finish(const BlockHandle& last_partition_block_handle,
                        Status* status) override;
 
@@ -61,9 +61,12 @@ class PartitionedFilterBlockBuilder : public FullFilterBlockBuilder {
   uint32_t filters_per_partition_;
   // The current number of filters in the last partition
   uint32_t filters_in_partition_;
+  // Number of keys added
+  size_t num_added_;
 };
 
-class PartitionedFilterBlockReader : public FilterBlockReader {
+class PartitionedFilterBlockReader : public FilterBlockReader,
+                                     public Cleanable {
  public:
   explicit PartitionedFilterBlockReader(const SliceTransform* prefix_extractor,
                                         bool whole_key_filtering,
@@ -76,33 +79,30 @@ class PartitionedFilterBlockReader : public FilterBlockReader {
 
   virtual bool IsBlockBased() override { return false; }
   virtual bool KeyMayMatch(
-      const Slice& key, uint64_t block_offset = kNotValid,
-      const bool no_io = false,
+      const Slice& key, const SliceTransform* prefix_extractor,
+      uint64_t block_offset = kNotValid, const bool no_io = false,
       const Slice* const const_ikey_ptr = nullptr) override;
   virtual bool PrefixMayMatch(
-      const Slice& prefix, uint64_t block_offset = kNotValid,
-      const bool no_io = false,
+      const Slice& prefix, const SliceTransform* prefix_extractor,
+      uint64_t block_offset = kNotValid, const bool no_io = false,
       const Slice* const const_ikey_ptr = nullptr) override;
   virtual size_t ApproximateMemoryUsage() const override;
 
  private:
   Slice GetFilterPartitionHandle(const Slice& entry);
   BlockBasedTable::CachableEntry<FilterBlockReader> GetFilterPartition(
-      Slice* handle, const bool no_io, bool* cached);
+      FilePrefetchBuffer* prefetch_buffer, Slice* handle, const bool no_io,
+      bool* cached, const SliceTransform* prefix_extractor = nullptr);
+  virtual void CacheDependencies(
+      bool bin, const SliceTransform* prefix_extractor) override;
 
   const SliceTransform* prefix_extractor_;
   std::unique_ptr<Block> idx_on_fltr_blk_;
   const Comparator& comparator_;
   const BlockBasedTable* table_;
-  std::unordered_map<uint64_t, FilterBlockReader*> filter_cache_;
-  autovector<Cache::Handle*> handle_list_;
-  struct BlockHandleCmp {
-    bool operator()(const BlockHandle& lhs, const BlockHandle& rhs) const {
-      return lhs.offset() < rhs.offset();
-    }
-  };
-  std::set<BlockHandle, BlockHandleCmp> filter_block_set_;
-  port::RWMutex mu_;
+  std::unordered_map<uint64_t,
+                     BlockBasedTable::CachableEntry<FilterBlockReader>>
+      filter_map_;
 };
 
 }  // namespace rocksdb

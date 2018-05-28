@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 
 #include "db/memtable_list.h"
 #include <algorithm>
@@ -84,10 +82,10 @@ class MemTableListTest : public testing::Test {
     // Create dummy mutex.
     InstrumentedMutex mutex;
     InstrumentedMutexLock l(&mutex);
-
-    return list->InstallMemtableFlushResults(cfd, mutable_cf_options, m,
-                                             &versions, &mutex, 1, to_delete,
-                                             nullptr, &log_buffer);
+    LogsWithPrepTracker dummy_prep_tracker;
+    return list->InstallMemtableFlushResults(
+        cfd, mutable_cf_options, m, &dummy_prep_tracker, &versions, &mutex, 1,
+        to_delete, nullptr, &log_buffer);
   }
 };
 

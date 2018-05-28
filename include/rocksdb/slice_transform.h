@@ -1,7 +1,7 @@
 // Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-// This source code is licensed under the BSD-style license found in the
-// LICENSE file in the root directory of this source tree. An additional grant
-// of patent rights can be found in the PATENTS file in the same directory.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 // Copyright (c) 2012 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
@@ -22,7 +22,7 @@ namespace rocksdb {
 class Slice;
 
 /*
- * A SliceTranform is a generic pluggable way of transforming one string
+ * A SliceTransform is a generic pluggable way of transforming one string
  * to another. Its primary use-case is in configuring rocksdb
  * to store prefix blooms by setting prefix_extractor in
  * ColumnFamilyOptions.
@@ -58,7 +58,7 @@ class SliceTransform {
   virtual bool InDomain(const Slice& key) const = 0;
 
   // This is currently not used and remains here for backward compatibility.
-  virtual bool InRange(const Slice& dst) const { return false; }
+  virtual bool InRange(const Slice& /*dst*/) const { return false; }
 
   // Transform(s)=Transform(`prefix`) for any s with `prefix` as a prefix.
   //
@@ -72,7 +72,7 @@ class SliceTransform {
   // by setting ReadOptions.total_order_seek = true.
   //
   // Here is an example: Suppose we implement a slice transform that returns
-  // the first part of the string after spliting it using delimiter ",":
+  // the first part of the string after splitting it using delimiter ",":
   // 1. SameResultWhenAppended("abc,") should return true. If applying prefix
   //    bloom filter using it, all slices matching "abc:.*" will be extracted
   //    to "abc,", so any SST file or memtable containing any of those key
@@ -83,7 +83,7 @@ class SliceTransform {
   //    "abcd,e", the file can be filtered out and the key will be invisible.
   //
   // i.e., an implementation always returning false is safe.
-  virtual bool SameResultWhenAppended(const Slice& prefix) const {
+  virtual bool SameResultWhenAppended(const Slice& /*prefix*/) const {
     return false;
   }
 };

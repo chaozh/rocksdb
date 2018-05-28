@@ -1,9 +1,7 @@
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under the BSD-style license found in the
-//  LICENSE file in the root directory of this source tree. An additional grant
-//  of patent rights can be found in the PATENTS file in the same directory.
-//  This source code is also licensed under the GPLv2 license found in the
-//  COPYING file in the root directory of this source tree.
+//  This source code is licensed under both the GPLv2 (found in the
+//  COPYING file in the root directory) and Apache 2.0 License
+//  (found in the LICENSE.Apache file in the root directory).
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -42,22 +40,13 @@ inline Status IOError(const std::string& context, int err_number) {
              : Status::IOError(context, strerror(err_number));
 }
 
-// Note the below two do not set errno because they are used only here in this
-// file
-// on a Windows handle and, therefore, not necessary. Translating GetLastError()
-// to errno
-// is a sad business
-inline int fsync(HANDLE hFile) {
-  if (!FlushFileBuffers(hFile)) {
-    return -1;
-  }
+class WinFileData;
 
-  return 0;
-}
+Status pwrite(const WinFileData* file_data, const Slice& data,
+  uint64_t offset, size_t& bytes_written);
 
-SSIZE_T pwrite(HANDLE hFile, const char* src, size_t numBytes, uint64_t offset);
-
-SSIZE_T pread(HANDLE hFile, char* src, size_t numBytes, uint64_t offset);
+Status pread(const WinFileData* file_data, char* src, size_t num_bytes,
+  uint64_t offset, size_t& bytes_read);
 
 Status fallocate(const std::string& filename, HANDLE hFile, uint64_t to_size);
 
@@ -106,8 +95,8 @@ class WinFileData {
 class WinSequentialFile : protected WinFileData, public SequentialFile {
 
   // Override for behavior change when creating a custom env
-  virtual SSIZE_T PositionedReadInternal(char* src, size_t numBytes,
-    uint64_t offset) const;
+  virtual Status PositionedReadInternal(char* src, size_t numBytes,
+    uint64_t offset, size_t& bytes_read) const;
 
 public:
   WinSequentialFile(const std::string& fname, HANDLE f,
@@ -242,8 +231,8 @@ class WinRandomAccessImpl {
   size_t       alignment_;
 
   // Override for behavior change when creating a custom env
-  virtual SSIZE_T PositionedReadInternal(char* src, size_t numBytes,
-                                         uint64_t offset) const;
+  virtual Status PositionedReadInternal(char* src, size_t numBytes,
+                                        uint64_t offset, size_t& bytes_read) const;
 
   WinRandomAccessImpl(WinFileData* file_base, size_t alignment,
                       const EnvOptions& options);
@@ -370,6 +359,8 @@ class WinWritableFile : private WinFileData,
 
   virtual Status Fsync() override;
 
+  virtual bool IsSyncThreadSafe() const override;
+
   // Indicates if the class makes use of direct I/O
   // Use PositionedAppend
   virtual bool use_direct_io() const override;
@@ -420,11 +411,32 @@ class WinRandomRWFile : private WinFileData,
   virtual Status Close() override;
 };
 
-class WinDirectory : public Directory {
- public:
-  WinDirectory() {}
+class WinMemoryMappedBuffer : public MemoryMappedFileBuffer {
+private:
+  HANDLE  file_handle_;
+  HANDLE  map_handle_;
+public:
+  WinMemoryMappedBuffer(HANDLE file_handle, HANDLE map_handle, void* base, size_t size) :
+    MemoryMappedFileBuffer(base, size),
+    file_handle_(file_handle),
+    map_handle_(map_handle) {}
+  ~WinMemoryMappedBuffer() override;
+};
 
+class WinDirectory : public Directory {
+  HANDLE handle_;
+ public:
+  explicit
+  WinDirectory(HANDLE h) noexcept : 
+    handle_(h) {
+    assert(handle_ != INVALID_HANDLE_VALUE);
+  }
+  ~WinDirectory() {
+    ::CloseHandle(handle_);
+  }
   virtual Status Fsync() override;
+
+  size_t GetUniqueId(char* id, size_t max_size) const override;
 };
 
 class WinFileLock : public FileLock {
