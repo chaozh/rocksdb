@@ -183,9 +183,6 @@ class ListColumnFamiliesCommand : public LDBCommand {
   virtual void DoCommand() override;
 
   virtual bool NoDBOpen() override { return true; }
-
- private:
-  std::string dbname_;
 };
 
 class CreateColumnFamilyCommand : public LDBCommand {
@@ -203,6 +200,23 @@ class CreateColumnFamilyCommand : public LDBCommand {
 
  private:
   std::string new_cf_name_;
+};
+
+class DropColumnFamilyCommand : public LDBCommand {
+ public:
+  static std::string Name() { return "drop_column_family"; }
+
+  DropColumnFamilyCommand(const std::vector<std::string>& params,
+                          const std::map<std::string, std::string>& options,
+                          const std::vector<std::string>& flags);
+
+  static void Help(std::string& ret);
+  virtual void DoCommand() override;
+
+  virtual bool NoDBOpen() override { return false; }
+
+ private:
+  std::string cf_name_to_drop_;
 };
 
 class ReduceDBLevelsCommand : public LDBCommand {
@@ -493,6 +507,7 @@ class BackupableCommand : public LDBCommand {
   std::string backup_dir_;
   int num_threads_;
   std::unique_ptr<Logger> logger_;
+  std::shared_ptr<Env> backup_env_guard_;
 
  private:
   static const std::string ARG_BACKUP_DIR;
@@ -520,6 +535,75 @@ class RestoreCommand : public BackupableCommand {
   virtual void DoCommand() override;
   virtual bool NoDBOpen() override { return true; }
   static void Help(std::string& ret);
+};
+
+class WriteExternalSstFilesCommand : public LDBCommand {
+ public:
+  static std::string Name() { return "write_extern_sst"; }
+  WriteExternalSstFilesCommand(
+      const std::vector<std::string>& params,
+      const std::map<std::string, std::string>& options,
+      const std::vector<std::string>& flags);
+
+  virtual void DoCommand() override;
+
+  virtual bool NoDBOpen() override { return false; }
+
+  virtual Options PrepareOptionsForOpenDB() override;
+
+  static void Help(std::string& ret);
+
+ private:
+  std::string output_sst_path_;
+};
+
+class IngestExternalSstFilesCommand : public LDBCommand {
+ public:
+  static std::string Name() { return "ingest_extern_sst"; }
+  IngestExternalSstFilesCommand(
+      const std::vector<std::string>& params,
+      const std::map<std::string, std::string>& options,
+      const std::vector<std::string>& flags);
+
+  virtual void DoCommand() override;
+
+  virtual bool NoDBOpen() override { return false; }
+
+  virtual Options PrepareOptionsForOpenDB() override;
+
+  static void Help(std::string& ret);
+
+ private:
+  std::string input_sst_path_;
+  bool move_files_;
+  bool snapshot_consistency_;
+  bool allow_global_seqno_;
+  bool allow_blocking_flush_;
+  bool ingest_behind_;
+  bool write_global_seqno_;
+
+  static const std::string ARG_MOVE_FILES;
+  static const std::string ARG_SNAPSHOT_CONSISTENCY;
+  static const std::string ARG_ALLOW_GLOBAL_SEQNO;
+  static const std::string ARG_ALLOW_BLOCKING_FLUSH;
+  static const std::string ARG_INGEST_BEHIND;
+  static const std::string ARG_WRITE_GLOBAL_SEQNO;
+};
+
+// Command that prints out range delete tombstones in SST files.
+class ListFileRangeDeletesCommand : public LDBCommand {
+ public:
+  static std::string Name() { return "list_file_range_deletes"; }
+
+  ListFileRangeDeletesCommand(const std::map<std::string, std::string>& options,
+                              const std::vector<std::string>& flags);
+
+  void DoCommand() override;
+
+  static void Help(std::string& ret);
+
+ private:
+  int max_keys_ = 1000;
 };
 
 }  // namespace rocksdb

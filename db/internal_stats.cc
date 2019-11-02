@@ -2,26 +2,24 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 //
+// Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
+//
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #include "db/internal_stats.h"
 
-#ifndef __STDC_FORMAT_MACROS
-#define __STDC_FORMAT_MACROS
-#endif
-
-#include <inttypes.h>
 #include <algorithm>
+#include <cinttypes>
 #include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "db/column_family.h"
-#include "db/db_impl.h"
-#include "table/block_based_table_factory.h"
+#include "db/db_impl/db_impl.h"
+#include "table/block_based/block_based_table_factory.h"
 #include "util/string_util.h"
 
 namespace rocksdb {
@@ -45,6 +43,8 @@ const std::map<LevelStatType, LevelStat> InternalStats::compaction_level_stats =
         {LevelStatType::READ_MBPS, LevelStat{"ReadMBps", "Rd(MB/s)"}},
         {LevelStatType::WRITE_MBPS, LevelStat{"WriteMBps", "Wr(MB/s)"}},
         {LevelStatType::COMP_SEC, LevelStat{"CompSec", "Comp(sec)"}},
+        {LevelStatType::COMP_CPU_SEC,
+         LevelStat{"CompMergeCPU", "CompMergeCPU(sec)"}},
         {LevelStatType::COMP_COUNT, LevelStat{"CompCount", "Comp(cnt)"}},
         {LevelStatType::AVG_SEC, LevelStat{"AvgSec", "Avg(sec)"}},
         {LevelStatType::KEY_IN, LevelStat{"KeyIn", "KeyIn"}},
@@ -56,7 +56,8 @@ const double kMB = 1048576.0;
 const double kGB = kMB * 1024;
 const double kMicrosInSec = 1000000.0;
 
-void PrintLevelStatsHeader(char* buf, size_t len, const std::string& cf_name) {
+void PrintLevelStatsHeader(char* buf, size_t len, const std::string& cf_name,
+                           const std::string& group_by) {
   int written_size =
       snprintf(buf, len, "\n** Compaction Stats [%s] **\n", cf_name.c_str());
   auto hdr = [](LevelStatType t) {
@@ -64,15 +65,16 @@ void PrintLevelStatsHeader(char* buf, size_t len, const std::string& cf_name) {
   };
   int line_size = snprintf(
       buf + written_size, len - written_size,
-      "Level    %s   %s     %s %s  %s %s %s %s %s %s %s %s %s %s %s %s %s\n",
+      "%s    %s   %s     %s %s  %s %s %s %s %s %s %s %s %s %s %s %s %s %s\n",
       // Note that we skip COMPACTED_FILES and merge it with Files column
-      hdr(LevelStatType::NUM_FILES), hdr(LevelStatType::SIZE_BYTES),
-      hdr(LevelStatType::SCORE), hdr(LevelStatType::READ_GB),
-      hdr(LevelStatType::RN_GB), hdr(LevelStatType::RNP1_GB),
-      hdr(LevelStatType::WRITE_GB), hdr(LevelStatType::W_NEW_GB),
-      hdr(LevelStatType::MOVED_GB), hdr(LevelStatType::WRITE_AMP),
-      hdr(LevelStatType::READ_MBPS), hdr(LevelStatType::WRITE_MBPS),
-      hdr(LevelStatType::COMP_SEC), hdr(LevelStatType::COMP_COUNT),
+      group_by.c_str(), hdr(LevelStatType::NUM_FILES),
+      hdr(LevelStatType::SIZE_BYTES), hdr(LevelStatType::SCORE),
+      hdr(LevelStatType::READ_GB), hdr(LevelStatType::RN_GB),
+      hdr(LevelStatType::RNP1_GB), hdr(LevelStatType::WRITE_GB),
+      hdr(LevelStatType::W_NEW_GB), hdr(LevelStatType::MOVED_GB),
+      hdr(LevelStatType::WRITE_AMP), hdr(LevelStatType::READ_MBPS),
+      hdr(LevelStatType::WRITE_MBPS), hdr(LevelStatType::COMP_SEC),
+      hdr(LevelStatType::COMP_CPU_SEC), hdr(LevelStatType::COMP_COUNT),
       hdr(LevelStatType::AVG_SEC), hdr(LevelStatType::KEY_IN),
       hdr(LevelStatType::KEY_DROP));
 
@@ -106,6 +108,7 @@ void PrepareLevelStats(std::map<LevelStatType, double>* level_stats,
   (*level_stats)[LevelStatType::WRITE_MBPS] =
       stats.bytes_written / kMB / elapsed;
   (*level_stats)[LevelStatType::COMP_SEC] = stats.micros / kMicrosInSec;
+  (*level_stats)[LevelStatType::COMP_CPU_SEC] = stats.cpu_micros / kMicrosInSec;
   (*level_stats)[LevelStatType::COMP_COUNT] = stats.count;
   (*level_stats)[LevelStatType::AVG_SEC] =
       stats.count == 0 ? 0 : stats.micros / kMicrosInSec / stats.count;
@@ -132,7 +135,8 @@ void PrintLevelStats(char* buf, size_t len, const std::string& name,
       "%5.1f "    /*  W-Amp */
       "%8.1f "    /*  Rd(MB/s) */
       "%8.1f "    /*  Wr(MB/s) */
-      "%9.0f "    /*  Comp(sec) */
+      "%9.2f "    /*  Comp(sec) */
+      "%17.2f "   /*  CompMergeCPU(sec) */
       "%9d "      /*  Comp(cnt) */
       "%8.3f "    /*  Avg(sec) */
       "%7s "      /*  KeyIn */
@@ -153,6 +157,7 @@ void PrintLevelStats(char* buf, size_t len, const std::string& name,
       stat_value.at(LevelStatType::READ_MBPS),
       stat_value.at(LevelStatType::WRITE_MBPS),
       stat_value.at(LevelStatType::COMP_SEC),
+      stat_value.at(LevelStatType::COMP_CPU_SEC),
       static_cast<int>(stat_value.at(LevelStatType::COMP_COUNT)),
       stat_value.at(LevelStatType::AVG_SEC),
       NumberToHumanString(
@@ -231,6 +236,8 @@ static const std::string current_version_number =
     "current-super-version-number";
 static const std::string estimate_live_data_size = "estimate-live-data-size";
 static const std::string min_log_number_to_keep_str = "min-log-number-to-keep";
+static const std::string min_obsolete_sst_number_to_keep_str =
+    "min-obsolete-sst-number-to-keep";
 static const std::string base_level_str = "base-level";
 static const std::string total_sst_files_size = "total-sst-files-size";
 static const std::string live_sst_files_size = "live-sst-files-size";
@@ -249,6 +256,7 @@ static const std::string estimate_oldest_key_time = "estimate-oldest-key-time";
 static const std::string block_cache_capacity = "block-cache-capacity";
 static const std::string block_cache_usage = "block-cache-usage";
 static const std::string block_cache_pinned_usage = "block-cache-pinned-usage";
+static const std::string options_statistics = "options-statistics";
 
 const std::string DB::Properties::kNumFilesAtLevelPrefix =
     rocksdb_prefix + num_files_at_level_prefix;
@@ -309,6 +317,8 @@ const std::string DB::Properties::kEstimateLiveDataSize =
     rocksdb_prefix + estimate_live_data_size;
 const std::string DB::Properties::kMinLogNumberToKeep =
     rocksdb_prefix + min_log_number_to_keep_str;
+const std::string DB::Properties::kMinObsoleteSstNumberToKeep =
+    rocksdb_prefix + min_obsolete_sst_number_to_keep_str;
 const std::string DB::Properties::kTotalSstFilesSize =
     rocksdb_prefix + total_sst_files_size;
 const std::string DB::Properties::kLiveSstFilesSize =
@@ -332,116 +342,144 @@ const std::string DB::Properties::kBlockCacheUsage =
     rocksdb_prefix + block_cache_usage;
 const std::string DB::Properties::kBlockCachePinnedUsage =
     rocksdb_prefix + block_cache_pinned_usage;
+const std::string DB::Properties::kOptionsStatistics =
+    rocksdb_prefix + options_statistics;
 
 const std::unordered_map<std::string, DBPropertyInfo>
     InternalStats::ppt_name_to_info = {
         {DB::Properties::kNumFilesAtLevelPrefix,
-         {false, &InternalStats::HandleNumFilesAtLevel, nullptr, nullptr}},
+         {false, &InternalStats::HandleNumFilesAtLevel, nullptr, nullptr,
+          nullptr}},
         {DB::Properties::kCompressionRatioAtLevelPrefix,
          {false, &InternalStats::HandleCompressionRatioAtLevelPrefix, nullptr,
-          nullptr}},
+          nullptr, nullptr}},
         {DB::Properties::kLevelStats,
-         {false, &InternalStats::HandleLevelStats, nullptr, nullptr}},
+         {false, &InternalStats::HandleLevelStats, nullptr, nullptr, nullptr}},
         {DB::Properties::kStats,
-         {false, &InternalStats::HandleStats, nullptr, nullptr}},
+         {false, &InternalStats::HandleStats, nullptr, nullptr, nullptr}},
         {DB::Properties::kCFStats,
          {false, &InternalStats::HandleCFStats, nullptr,
-          &InternalStats::HandleCFMapStats}},
+          &InternalStats::HandleCFMapStats, nullptr}},
         {DB::Properties::kCFStatsNoFileHistogram,
-         {false, &InternalStats::HandleCFStatsNoFileHistogram, nullptr,
+         {false, &InternalStats::HandleCFStatsNoFileHistogram, nullptr, nullptr,
           nullptr}},
         {DB::Properties::kCFFileHistogram,
-         {false, &InternalStats::HandleCFFileHistogram, nullptr, nullptr}},
+         {false, &InternalStats::HandleCFFileHistogram, nullptr, nullptr,
+          nullptr}},
         {DB::Properties::kDBStats,
-         {false, &InternalStats::HandleDBStats, nullptr, nullptr}},
+         {false, &InternalStats::HandleDBStats, nullptr, nullptr, nullptr}},
         {DB::Properties::kSSTables,
-         {false, &InternalStats::HandleSsTables, nullptr, nullptr}},
+         {false, &InternalStats::HandleSsTables, nullptr, nullptr, nullptr}},
         {DB::Properties::kAggregatedTableProperties,
          {false, &InternalStats::HandleAggregatedTableProperties, nullptr,
-          nullptr}},
+          nullptr, nullptr}},
         {DB::Properties::kAggregatedTablePropertiesAtLevel,
          {false, &InternalStats::HandleAggregatedTablePropertiesAtLevel,
-          nullptr, nullptr}},
+          nullptr, nullptr, nullptr}},
         {DB::Properties::kNumImmutableMemTable,
-         {false, nullptr, &InternalStats::HandleNumImmutableMemTable, nullptr}},
+         {false, nullptr, &InternalStats::HandleNumImmutableMemTable, nullptr,
+          nullptr}},
         {DB::Properties::kNumImmutableMemTableFlushed,
          {false, nullptr, &InternalStats::HandleNumImmutableMemTableFlushed,
-          nullptr}},
+          nullptr, nullptr}},
         {DB::Properties::kMemTableFlushPending,
-         {false, nullptr, &InternalStats::HandleMemTableFlushPending, nullptr}},
+         {false, nullptr, &InternalStats::HandleMemTableFlushPending, nullptr,
+          nullptr}},
         {DB::Properties::kCompactionPending,
-         {false, nullptr, &InternalStats::HandleCompactionPending, nullptr}},
+         {false, nullptr, &InternalStats::HandleCompactionPending, nullptr,
+          nullptr}},
         {DB::Properties::kBackgroundErrors,
-         {false, nullptr, &InternalStats::HandleBackgroundErrors, nullptr}},
+         {false, nullptr, &InternalStats::HandleBackgroundErrors, nullptr,
+          nullptr}},
         {DB::Properties::kCurSizeActiveMemTable,
-         {false, nullptr, &InternalStats::HandleCurSizeActiveMemTable,
+         {false, nullptr, &InternalStats::HandleCurSizeActiveMemTable, nullptr,
           nullptr}},
         {DB::Properties::kCurSizeAllMemTables,
-         {false, nullptr, &InternalStats::HandleCurSizeAllMemTables, nullptr}},
+         {false, nullptr, &InternalStats::HandleCurSizeAllMemTables, nullptr,
+          nullptr}},
         {DB::Properties::kSizeAllMemTables,
-         {false, nullptr, &InternalStats::HandleSizeAllMemTables, nullptr}},
+         {false, nullptr, &InternalStats::HandleSizeAllMemTables, nullptr,
+          nullptr}},
         {DB::Properties::kNumEntriesActiveMemTable,
          {false, nullptr, &InternalStats::HandleNumEntriesActiveMemTable,
-          nullptr}},
+          nullptr, nullptr}},
         {DB::Properties::kNumEntriesImmMemTables,
-         {false, nullptr, &InternalStats::HandleNumEntriesImmMemTables,
+         {false, nullptr, &InternalStats::HandleNumEntriesImmMemTables, nullptr,
           nullptr}},
         {DB::Properties::kNumDeletesActiveMemTable,
          {false, nullptr, &InternalStats::HandleNumDeletesActiveMemTable,
-          nullptr}},
+          nullptr, nullptr}},
         {DB::Properties::kNumDeletesImmMemTables,
-         {false, nullptr, &InternalStats::HandleNumDeletesImmMemTables,
+         {false, nullptr, &InternalStats::HandleNumDeletesImmMemTables, nullptr,
           nullptr}},
         {DB::Properties::kEstimateNumKeys,
-         {false, nullptr, &InternalStats::HandleEstimateNumKeys, nullptr}},
+         {false, nullptr, &InternalStats::HandleEstimateNumKeys, nullptr,
+          nullptr}},
         {DB::Properties::kEstimateTableReadersMem,
-         {true, nullptr, &InternalStats::HandleEstimateTableReadersMem,
+         {true, nullptr, &InternalStats::HandleEstimateTableReadersMem, nullptr,
           nullptr}},
         {DB::Properties::kIsFileDeletionsEnabled,
-         {false, nullptr, &InternalStats::HandleIsFileDeletionsEnabled,
+         {false, nullptr, &InternalStats::HandleIsFileDeletionsEnabled, nullptr,
           nullptr}},
         {DB::Properties::kNumSnapshots,
-         {false, nullptr, &InternalStats::HandleNumSnapshots, nullptr}},
+         {false, nullptr, &InternalStats::HandleNumSnapshots, nullptr,
+          nullptr}},
         {DB::Properties::kOldestSnapshotTime,
-         {false, nullptr, &InternalStats::HandleOldestSnapshotTime, nullptr}},
+         {false, nullptr, &InternalStats::HandleOldestSnapshotTime, nullptr,
+          nullptr}},
         {DB::Properties::kNumLiveVersions,
-         {false, nullptr, &InternalStats::HandleNumLiveVersions, nullptr}},
+         {false, nullptr, &InternalStats::HandleNumLiveVersions, nullptr,
+          nullptr}},
         {DB::Properties::kCurrentSuperVersionNumber,
          {false, nullptr, &InternalStats::HandleCurrentSuperVersionNumber,
-          nullptr}},
+          nullptr, nullptr}},
         {DB::Properties::kEstimateLiveDataSize,
-         {true, nullptr, &InternalStats::HandleEstimateLiveDataSize, nullptr}},
+         {true, nullptr, &InternalStats::HandleEstimateLiveDataSize, nullptr,
+          nullptr}},
         {DB::Properties::kMinLogNumberToKeep,
-         {false, nullptr, &InternalStats::HandleMinLogNumberToKeep, nullptr}},
+         {false, nullptr, &InternalStats::HandleMinLogNumberToKeep, nullptr,
+          nullptr}},
+        {DB::Properties::kMinObsoleteSstNumberToKeep,
+         {false, nullptr, &InternalStats::HandleMinObsoleteSstNumberToKeep,
+          nullptr, nullptr}},
         {DB::Properties::kBaseLevel,
-         {false, nullptr, &InternalStats::HandleBaseLevel, nullptr}},
+         {false, nullptr, &InternalStats::HandleBaseLevel, nullptr, nullptr}},
         {DB::Properties::kTotalSstFilesSize,
-         {false, nullptr, &InternalStats::HandleTotalSstFilesSize, nullptr}},
+         {false, nullptr, &InternalStats::HandleTotalSstFilesSize, nullptr,
+          nullptr}},
         {DB::Properties::kLiveSstFilesSize,
-         {false, nullptr, &InternalStats::HandleLiveSstFilesSize, nullptr}},
+         {false, nullptr, &InternalStats::HandleLiveSstFilesSize, nullptr,
+          nullptr}},
         {DB::Properties::kEstimatePendingCompactionBytes,
          {false, nullptr, &InternalStats::HandleEstimatePendingCompactionBytes,
-          nullptr}},
+          nullptr, nullptr}},
         {DB::Properties::kNumRunningFlushes,
-         {false, nullptr, &InternalStats::HandleNumRunningFlushes, nullptr}},
+         {false, nullptr, &InternalStats::HandleNumRunningFlushes, nullptr,
+          nullptr}},
         {DB::Properties::kNumRunningCompactions,
-         {false, nullptr, &InternalStats::HandleNumRunningCompactions,
+         {false, nullptr, &InternalStats::HandleNumRunningCompactions, nullptr,
           nullptr}},
         {DB::Properties::kActualDelayedWriteRate,
-         {false, nullptr, &InternalStats::HandleActualDelayedWriteRate,
+         {false, nullptr, &InternalStats::HandleActualDelayedWriteRate, nullptr,
           nullptr}},
         {DB::Properties::kIsWriteStopped,
-         {false, nullptr, &InternalStats::HandleIsWriteStopped, nullptr}},
+         {false, nullptr, &InternalStats::HandleIsWriteStopped, nullptr,
+          nullptr}},
         {DB::Properties::kEstimateOldestKeyTime,
-         {false, nullptr, &InternalStats::HandleEstimateOldestKeyTime,
+         {false, nullptr, &InternalStats::HandleEstimateOldestKeyTime, nullptr,
           nullptr}},
         {DB::Properties::kBlockCacheCapacity,
-         {false, nullptr, &InternalStats::HandleBlockCacheCapacity, nullptr}},
-        {DB::Properties::kBlockCacheUsage,
-         {false, nullptr, &InternalStats::HandleBlockCacheUsage, nullptr}},
-        {DB::Properties::kBlockCachePinnedUsage,
-         {false, nullptr, &InternalStats::HandleBlockCachePinnedUsage,
+         {false, nullptr, &InternalStats::HandleBlockCacheCapacity, nullptr,
           nullptr}},
+        {DB::Properties::kBlockCacheUsage,
+         {false, nullptr, &InternalStats::HandleBlockCacheUsage, nullptr,
+          nullptr}},
+        {DB::Properties::kBlockCachePinnedUsage,
+         {false, nullptr, &InternalStats::HandleBlockCachePinnedUsage, nullptr,
+          nullptr}},
+        {DB::Properties::kOptionsStatistics,
+         {false, nullptr, nullptr, nullptr,
+          &DBImpl::GetPropertyHandleOptionsStatistics}},
 };
 
 const DBPropertyInfo* GetPropertyInfo(const Slice& property) {
@@ -800,6 +838,13 @@ bool InternalStats::HandleMinLogNumberToKeep(uint64_t* value, DBImpl* db,
   return true;
 }
 
+bool InternalStats::HandleMinObsoleteSstNumberToKeep(uint64_t* value,
+                                                     DBImpl* db,
+                                                     Version* /*version*/) {
+  *value = db->MinObsoleteSstNumberToKeep();
+  return true;
+}
+
 bool InternalStats::HandleActualDelayedWriteRate(uint64_t* value, DBImpl* db,
                                                  Version* /*version*/) {
   const WriteController& wc = db->write_controller();
@@ -909,14 +954,17 @@ void InternalStats::DumpDBStats(std::string* value) {
            seconds_up, interval_seconds_up);
   value->append(buf);
   // Cumulative
-  uint64_t user_bytes_written = GetDBStats(InternalStats::BYTES_WRITTEN);
-  uint64_t num_keys_written = GetDBStats(InternalStats::NUMBER_KEYS_WRITTEN);
-  uint64_t write_other = GetDBStats(InternalStats::WRITE_DONE_BY_OTHER);
-  uint64_t write_self = GetDBStats(InternalStats::WRITE_DONE_BY_SELF);
-  uint64_t wal_bytes = GetDBStats(InternalStats::WAL_FILE_BYTES);
-  uint64_t wal_synced = GetDBStats(InternalStats::WAL_FILE_SYNCED);
-  uint64_t write_with_wal = GetDBStats(InternalStats::WRITE_WITH_WAL);
-  uint64_t write_stall_micros = GetDBStats(InternalStats::WRITE_STALL_MICROS);
+  uint64_t user_bytes_written =
+      GetDBStats(InternalStats::kIntStatsBytesWritten);
+  uint64_t num_keys_written =
+      GetDBStats(InternalStats::kIntStatsNumKeysWritten);
+  uint64_t write_other = GetDBStats(InternalStats::kIntStatsWriteDoneByOther);
+  uint64_t write_self = GetDBStats(InternalStats::kIntStatsWriteDoneBySelf);
+  uint64_t wal_bytes = GetDBStats(InternalStats::kIntStatsWalFileBytes);
+  uint64_t wal_synced = GetDBStats(InternalStats::kIntStatsWalFileSynced);
+  uint64_t write_with_wal = GetDBStats(InternalStats::kIntStatsWriteWithWal);
+  uint64_t write_stall_micros =
+      GetDBStats(InternalStats::kIntStatsWriteStallMicros);
 
   const int kHumanMicrosLen = 32;
   char human_micros[kHumanMicrosLen];
@@ -1107,6 +1155,20 @@ void InternalStats::DumpCFMapStats(
   (*levels_stats)[-1] = sum_stats;  //  -1 is for the Sum level
 }
 
+void InternalStats::DumpCFMapStatsByPriority(
+    std::map<int, std::map<LevelStatType, double>>* priorities_stats) {
+  for (size_t priority = 0; priority < comp_stats_by_pri_.size(); priority++) {
+    if (comp_stats_by_pri_[priority].micros > 0) {
+      std::map<LevelStatType, double> priority_stats;
+      PrepareLevelStats(&priority_stats, 0 /* num_files */,
+                        0 /* being_compacted */, 0 /* total_file_size */,
+                        0 /* compaction_score */, 0 /* w_amp */,
+                        comp_stats_by_pri_[priority]);
+      (*priorities_stats)[static_cast<int>(priority)] = priority_stats;
+    }
+  }
+}
+
 void InternalStats::DumpCFMapStatsIOStalls(
     std::map<std::string, std::string>* cf_stats) {
   (*cf_stats)["io_stalls.level0_slowdown"] =
@@ -1147,7 +1209,7 @@ void InternalStats::DumpCFStats(std::string* value) {
 void InternalStats::DumpCFStatsNoFileHistogram(std::string* value) {
   char buf[2000];
   // Per-ColumnFamily stats
-  PrintLevelStatsHeader(buf, sizeof(buf), cfd_->GetName());
+  PrintLevelStatsHeader(buf, sizeof(buf), cfd_->GetName(), "Level");
   value->append(buf);
 
   // Print stats for each level
@@ -1192,6 +1254,21 @@ void InternalStats::DumpCFStatsNoFileHistogram(std::string* value) {
       interval_stats.bytes_written / static_cast<double>(interval_ingest);
   PrintLevelStats(buf, sizeof(buf), "Int", 0, 0, 0, 0, w_amp, interval_stats);
   value->append(buf);
+
+  PrintLevelStatsHeader(buf, sizeof(buf), cfd_->GetName(), "Priority");
+  value->append(buf);
+  std::map<int, std::map<LevelStatType, double>> priorities_stats;
+  DumpCFMapStatsByPriority(&priorities_stats);
+  for (size_t priority = 0; priority < comp_stats_by_pri_.size(); ++priority) {
+    if (priorities_stats.find(static_cast<int>(priority)) !=
+        priorities_stats.end()) {
+      PrintLevelStats(
+          buf, sizeof(buf),
+          Env::PriorityToString(static_cast<Env::Priority>(priority)),
+          priorities_stats[static_cast<int>(priority)]);
+      value->append(buf);
+    }
+  }
 
   double seconds_up = (env_->NowMicros() - started_at_ + 1) / kMicrosInSec;
   double interval_seconds_up = seconds_up - cf_stats_snapshot_.seconds_up;

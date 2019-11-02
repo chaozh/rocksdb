@@ -17,9 +17,9 @@
 #include "rocksdb/statistics.h"
 #include "table/iterator_wrapper.h"
 #include "table/merging_iterator.h"
+#include "test_util/sync_point.h"
+#include "test_util/testharness.h"
 #include "util/string_util.h"
-#include "util/sync_point.h"
-#include "util/testharness.h"
 #include "utilities/merge_operators.h"
 
 namespace rocksdb {
@@ -36,7 +36,9 @@ class TestIterator : public InternalIterator {
         valid_(false),
         sequence_number_(0),
         iter_(0),
-        cmp(comparator) {}
+        cmp(comparator) {
+    data_.reserve(16);
+  }
 
   void AddPut(std::string argkey, std::string argvalue) {
     Add(argkey, kTypeValue, argvalue);
@@ -114,12 +116,12 @@ class TestIterator : public InternalIterator {
   // Number of operations done on this iterator since construction.
   size_t steps() const { return steps_; }
 
-  virtual bool Valid() const override {
+  bool Valid() const override {
     assert(initialized_);
     return valid_;
   }
 
-  virtual void SeekToFirst() override {
+  void SeekToFirst() override {
     assert(initialized_);
     ++steps_;
     DeleteCurrentIfNeeded();
@@ -127,7 +129,7 @@ class TestIterator : public InternalIterator {
     iter_ = 0;
   }
 
-  virtual void SeekToLast() override {
+  void SeekToLast() override {
     assert(initialized_);
     ++steps_;
     DeleteCurrentIfNeeded();
@@ -135,7 +137,7 @@ class TestIterator : public InternalIterator {
     iter_ = data_.size() - 1;
   }
 
-  virtual void Seek(const Slice& target) override {
+  void Seek(const Slice& target) override {
     assert(initialized_);
     SeekToFirst();
     ++steps_;
@@ -152,13 +154,13 @@ class TestIterator : public InternalIterator {
     }
   }
 
-  virtual void SeekForPrev(const Slice& target) override {
+  void SeekForPrev(const Slice& target) override {
     assert(initialized_);
     DeleteCurrentIfNeeded();
     SeekForPrevImpl(target, &cmp);
   }
 
-  virtual void Next() override {
+  void Next() override {
     assert(initialized_);
     assert(valid_);
     assert(iter_ < data_.size());
@@ -172,7 +174,7 @@ class TestIterator : public InternalIterator {
     valid_ = iter_ < data_.size();
   }
 
-  virtual void Prev() override {
+  void Prev() override {
     assert(initialized_);
     assert(valid_);
     assert(iter_ < data_.size());
@@ -186,23 +188,23 @@ class TestIterator : public InternalIterator {
     }
   }
 
-  virtual Slice key() const override {
+  Slice key() const override {
     assert(initialized_);
     return data_[iter_].first;
   }
 
-  virtual Slice value() const override {
+  Slice value() const override {
     assert(initialized_);
     return data_[iter_].second;
   }
 
-  virtual Status status() const override {
+  Status status() const override {
     assert(initialized_);
     return Status::OK();
   }
 
-  virtual bool IsKeyPinned() const override { return true; }
-  virtual bool IsValuePinned() const override { return true; }
+  bool IsKeyPinned() const override { return true; }
+  bool IsValuePinned() const override { return true; }
 
  private:
   bool initialized_;
@@ -2660,7 +2662,7 @@ TEST_F(DBIterWithMergeIterTest, InnerMergeIteratorDataRace1) {
   // MergeIterator::Prev() realized the mem table iterator is at its end
   // and before an SeekToLast() is called.
   rocksdb::SyncPoint::GetInstance()->SetCallBack(
-      "MergeIterator::Prev:BeforeSeekToLast",
+      "MergeIterator::Prev:BeforePrev",
       [&](void* /*arg*/) { internal_iter2_->Add("z", kTypeValue, "7", 12u); });
   rocksdb::SyncPoint::GetInstance()->EnableProcessing();
 
@@ -2696,7 +2698,7 @@ TEST_F(DBIterWithMergeIterTest, InnerMergeIteratorDataRace2) {
   // mem table after MergeIterator::Prev() realized the mem tableiterator is at
   // its end and before an SeekToLast() is called.
   rocksdb::SyncPoint::GetInstance()->SetCallBack(
-      "MergeIterator::Prev:BeforeSeekToLast", [&](void* /*arg*/) {
+      "MergeIterator::Prev:BeforePrev", [&](void* /*arg*/) {
         internal_iter2_->Add("z", kTypeValue, "7", 12u);
         internal_iter2_->Add("z", kTypeValue, "7", 11u);
       });
@@ -2734,7 +2736,7 @@ TEST_F(DBIterWithMergeIterTest, InnerMergeIteratorDataRace3) {
   // mem table after MergeIterator::Prev() realized the mem table iterator is at
   // its end and before an SeekToLast() is called.
   rocksdb::SyncPoint::GetInstance()->SetCallBack(
-      "MergeIterator::Prev:BeforeSeekToLast", [&](void* /*arg*/) {
+      "MergeIterator::Prev:BeforePrev", [&](void* /*arg*/) {
         internal_iter2_->Add("z", kTypeValue, "7", 16u, true);
         internal_iter2_->Add("z", kTypeValue, "7", 15u, true);
         internal_iter2_->Add("z", kTypeValue, "7", 14u, true);

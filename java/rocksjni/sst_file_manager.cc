@@ -129,6 +129,8 @@ jobject Java_org_rocksdb_SstFileManager_getTrackedFiles(JNIEnv* env,
       reinterpret_cast<std::shared_ptr<rocksdb::SstFileManager>*>(jhandle);
   auto tracked_files = sptr_sst_file_manager->get()->GetTrackedFiles();
 
+  //TODO(AR) could refactor to share code with rocksdb::HashMapJni::fromCppMap(env, tracked_files);
+
   const jobject jtracked_files = rocksdb::HashMapJni::construct(
       env, static_cast<uint32_t>(tracked_files.size()));
   if (jtracked_files == nullptr) {
@@ -136,10 +138,9 @@ jobject Java_org_rocksdb_SstFileManager_getTrackedFiles(JNIEnv* env,
     return nullptr;
   }
 
-  const rocksdb::HashMapJni::FnMapKV<const std::string, const uint64_t>
+  const rocksdb::HashMapJni::FnMapKV<const std::string, const uint64_t, jobject, jobject>
       fn_map_kv =
-          [env, &tracked_files](
-              const std::pair<const std::string, const uint64_t>& pair) {
+          [env](const std::pair<const std::string, const uint64_t>& pair) {
             const jstring jtracked_file_path =
                 env->NewStringUTF(pair.first.c_str());
             if (jtracked_file_path == nullptr) {

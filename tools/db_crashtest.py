@@ -1,10 +1,9 @@
-#! /usr/bin/env python
+#!/usr/bin/env python2
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 import os
-import re
 import sys
 import time
 import random
-import logging
 import tempfile
 import subprocess
 import shutil
@@ -17,27 +16,44 @@ import argparse
 #       default_params < {blackbox,whitebox}_default_params <
 #       simple_default_params <
 #       {blackbox,whitebox}_simple_default_params < args
+#   for cf_consistency:
+#       default_params < {blackbox,whitebox}_default_params <
+#       cf_consistency_params < args
 
 expected_values_file = tempfile.NamedTemporaryFile()
 
 default_params = {
     "acquire_snapshot_one_in": 10000,
     "block_size": 16384,
+    "cache_index_and_filter_blocks": lambda: random.randint(0, 1),
     "cache_size": 1048576,
+    "checkpoint_one_in": 1000000,
+    "compression_type": "snappy",
+    "compression_max_dict_bytes": lambda: 16384 * random.randint(0, 1),
+    "compression_zstd_max_train_bytes": lambda: 65536 * random.randint(0, 1),
     "clear_column_family_one_in": 0,
-    "delpercent": 5,
+    "compact_files_one_in": 1000000,
+    "compact_range_one_in": 1000000,
+    "delpercent": 4,
+    "delrangepercent": 1,
     "destroy_db_initially": 0,
+    "enable_pipelined_write": lambda: random.randint(0, 1),
     "expected_values_path": expected_values_file.name,
+    "flush_one_in": 1000000,
+    # Temporarily disable hash index
+    "index_type": lambda: random.choice([0,2]),
     "max_background_compactions": 20,
     "max_bytes_for_level_base": 10485760,
     "max_key": 100000000,
     "max_write_buffer_number": 3,
     "mmap_read": lambda: random.randint(0, 1),
     "nooverwritepercent": 1,
-    "open_files": 500000,
+    "open_files": lambda : random.choice([-1, 500000]),
+    "partition_filters": lambda: random.randint(0, 1),
     "prefixpercent": 5,
     "progress_reports": 0,
     "readpercent": 45,
+    "recycle_log_file_num": lambda: random.randint(0, 1),
     "reopen": 20,
     "snapshot_hold_ops": 100000,
     "subcompactions": lambda: random.randint(1, 4),
@@ -50,7 +66,12 @@ default_params = {
     "verify_checksum": 1,
     "write_buffer_size": 4 * 1024 * 1024,
     "writepercent": 35,
-    "format_version": lambda: random.randint(2, 3),
+    "format_version": lambda: random.randint(2, 4),
+    "index_block_restart_interval": lambda: random.choice(range(1, 16)),
+    "use_multiget" : lambda: random.randint(0, 1),
+    "periodic_compaction_seconds" :
+        lambda: random.choice([0, 0, 1, 2, 10, 100, 1000]),
+    "compaction_ttl" : lambda: random.choice([0, 0, 1, 2, 10, 100, 1000]),
 }
 
 _TEST_DIR_ENV_VAR = 'TEST_TMPDIR'
@@ -101,9 +122,9 @@ simple_default_params = {
     "max_background_compactions": 1,
     "max_bytes_for_level_base": 67108864,
     "memtablerep": "skip_list",
-    "prefix_size": 0,
     "prefixpercent": 0,
     "readpercent": 50,
+    "prefix_size" : -1,
     "target_file_size_base": 16777216,
     "target_file_size_multiplier": 1,
     "test_batches_snapshots": 0,
@@ -117,18 +138,53 @@ blackbox_simple_default_params = {
 
 whitebox_simple_default_params = {}
 
+cf_consistency_params = {
+    "disable_wal": lambda: random.randint(0, 1),
+    "reopen": 0,
+    "test_cf_consistency": 1,
+    # use small value for write_buffer_size so that RocksDB triggers flush
+    # more frequently
+    "write_buffer_size": 1024 * 1024,
+    "enable_pipelined_write": lambda: random.randint(0, 1),
+}
+
 
 def finalize_and_sanitize(src_params):
     dest_params = dict([(k,  v() if callable(v) else v)
                         for (k, v) in src_params.items()])
+    if dest_params.get("compression_type") != "zstd" or \
+            dest_params.get("compression_max_dict_bytes") == 0:
+        dest_params["compression_zstd_max_train_bytes"] = 0
     if dest_params.get("allow_concurrent_memtable_write", 1) == 1:
         dest_params["memtablerep"] = "skip_list"
     if dest_params["mmap_read"] == 1 or not is_direct_io_supported(
             dest_params["db"]):
         dest_params["use_direct_io_for_flush_and_compaction"] = 0
         dest_params["use_direct_reads"] = 0
+    if dest_params.get("test_batches_snapshots") == 1:
+        dest_params["delpercent"] += dest_params["delrangepercent"]
+        dest_params["delrangepercent"] = 0
+    if dest_params.get("disable_wal", 0) == 1:
+        dest_params["atomic_flush"] = 1
+    if dest_params.get("open_files", 1) != -1:
+        # Compaction TTL and periodic compactions are only compatible
+        # with open_files = -1
+        dest_params["compaction_ttl"] = 0
+        dest_params["periodic_compaction_seconds"] = 0
+    if dest_params.get("compaction_style", 0) == 2:
+        # Disable compaction TTL in FIFO compaction, because right
+        # now assertion failures are triggered.
+        dest_params["compaction_ttl"] = 0
+        dest_params["periodic_compaction_seconds"] = 0
+    if dest_params["partition_filters"] == 1:
+        if dest_params["index_type"] != 2:
+            dest_params["partition_filters"] = 0
+        else:
+            dest_params["use_block_based_filter"] = 0
+    if dest_params.get("atomic_flush", 0) == 1:
+        # disable pipelined write when atomic flush is used.
+        dest_params["enable_pipelined_write"] = 0
     return dest_params
-
 
 def gen_cmd_params(args):
     params = {}
@@ -144,6 +200,8 @@ def gen_cmd_params(args):
             params.update(blackbox_simple_default_params)
         if args.test_type == 'whitebox':
             params.update(whitebox_simple_default_params)
+    if args.cf_consistency:
+        params.update(cf_consistency_params)
 
     for k, v in vars(args).items():
         if v is not None:
@@ -156,7 +214,7 @@ def gen_cmd(params, unknown_params):
         '--{0}={1}'.format(k, v)
         for k, v in finalize_and_sanitize(params).items()
         if k not in set(['test_type', 'simple', 'duration', 'interval',
-                         'random_kill_odd'])
+                         'random_kill_odd', 'cf_consistency'])
         and v is not None] + unknown_params
     return cmd
 
@@ -204,12 +262,12 @@ def blackbox_crash_main(args, unknown_args):
 
         while True:
             line = child.stderr.readline().strip()
-            if line != '' and not line.startswith('WARNING'):
+            if line == '':
+                break
+            elif not line.startswith('WARNING'):
                 run_had_errors = True
                 print('stderr has error message:')
                 print('***' + line + '***')
-            else:
-                break
 
         if run_had_errors:
             sys.exit(2)
@@ -253,8 +311,12 @@ def whitebox_crash_main(args, unknown_args):
                     "kill_random_test": kill_random_test,
                 })
             elif kill_mode == 1:
+                if cmd_params.get('disable_wal', 0) == 1:
+                    my_kill_odd = kill_random_test / 50 + 1
+                else:
+                    my_kill_odd = kill_random_test / 10 + 1
                 additional_opts.update({
-                    "kill_random_test": (kill_random_test / 10 + 1),
+                    "kill_random_test": my_kill_odd,
                     "kill_prefix_blacklist": "WritableFileWriter::Append,"
                     + "WritableFileWriter::WriteBuffered",
                 })
@@ -287,7 +349,7 @@ def whitebox_crash_main(args, unknown_args):
             }
         else:
             # normal run
-            additional_opts = additional_opts = {
+            additional_opts = {
                 "kill_random_test": None,
                 "ops_per_thread": cmd_params['ops_per_thread'],
             }
@@ -310,8 +372,9 @@ def whitebox_crash_main(args, unknown_args):
         if additional_opts['kill_random_test'] is None and (retncode == 0):
             # we expect zero retncode if no kill option
             expected = True
-        elif additional_opts['kill_random_test'] is not None and retncode < 0:
-            # we expect negative retncode if kill option was given
+        elif additional_opts['kill_random_test'] is not None and retncode <= 0:
+            # When kill option is given, the test MIGHT kill itself.
+            # If it does, negative retncode is expected. Otherwise 0.
             expected = True
 
         if not expected:
@@ -348,6 +411,7 @@ def main():
         db_stress multiple times")
     parser.add_argument("test_type", choices=["blackbox", "whitebox"])
     parser.add_argument("--simple", action="store_true")
+    parser.add_argument("--cf_consistency", action='store_true')
 
     all_params = dict(default_params.items()
                       + blackbox_default_params.items()
