@@ -24,7 +24,7 @@
 #include "port/port.h"  // noexcept
 #include "table/persistent_cache_options.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 class RandomAccessFile;
 struct ReadOptions;
@@ -38,6 +38,8 @@ const int kMagicNumberLengthByte = 8;
 // block or a meta block.
 class BlockHandle {
  public:
+  // Creates a block handle with special values indicating "uninitialized,"
+  // distinct from the "null" block handle.
   BlockHandle();
   BlockHandle(uint64_t offset, uint64_t size);
 
@@ -64,6 +66,13 @@ class BlockHandle {
 
   // Maximum encoding length of a BlockHandle
   enum { kMaxEncodedLength = 10 + 10 };
+
+  inline bool operator==(const BlockHandle& rhs) const {
+    return offset_ == rhs.offset_ && size_ == rhs.size_;
+  }
+  inline bool operator!=(const BlockHandle& rhs) const {
+    return !(*this == rhs);
+  }
 
  private:
   uint64_t offset_;
@@ -117,7 +126,7 @@ inline uint32_t GetCompressFormatForVersion(CompressionType compression_type,
 }
 
 inline bool BlockBasedTableSupportedVersion(uint32_t version) {
-  return version <= 4;
+  return version <= 5;
 }
 
 // Footer encapsulates the fixed information stored at the tail
@@ -211,8 +220,13 @@ Status ReadFooterFromFile(RandomAccessFileReader* file,
                           uint64_t file_size, Footer* footer,
                           uint64_t enforce_table_magic_number = 0);
 
-// 1-byte type + 32-bit crc
+// 1-byte compression type + 32-bit checksum
 static const size_t kBlockTrailerSize = 5;
+
+// Make block size calculation for IO less error prone
+inline uint64_t block_size(const BlockHandle& handle) {
+  return handle.size() + kBlockTrailerSize;
+}
 
 inline CompressionType get_block_compression_type(const char* block_data,
                                                   size_t block_size) {
@@ -336,4 +350,4 @@ inline BlockHandle::BlockHandle()
 inline BlockHandle::BlockHandle(uint64_t _offset, uint64_t _size)
     : offset_(_offset), size_(_size) {}
 
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE

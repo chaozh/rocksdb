@@ -25,7 +25,7 @@
 #include "table/table_reader.h"
 #include "trace_replay/block_cache_tracer.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 class Env;
 class Arena;
@@ -49,7 +49,7 @@ class HistogramImpl;
 class TableCache {
  public:
   TableCache(const ImmutableCFOptions& ioptions,
-             const EnvOptions& storage_options, Cache* cache,
+             const FileOptions& storage_options, Cache* cache,
              BlockCacheTracer* const block_cache_tracer);
   ~TableCache();
 
@@ -67,13 +67,14 @@ class TableCache {
   // @param skip_filters Disables loading/accessing the filter block
   // @param level The level this table is at, -1 for "not set / don't know"
   InternalIterator* NewIterator(
-      const ReadOptions& options, const EnvOptions& toptions,
+      const ReadOptions& options, const FileOptions& toptions,
       const InternalKeyComparator& internal_comparator,
       const FileMetaData& file_meta, RangeDelAggregator* range_del_agg,
       const SliceTransform* prefix_extractor, TableReader** table_reader_ptr,
       HistogramImpl* file_read_hist, TableReaderCaller caller, Arena* arena,
-      bool skip_filters, int level, const InternalKey* smallest_compaction_key,
-      const InternalKey* largest_compaction_key);
+      bool skip_filters, int level, size_t max_file_size_for_l0_meta_pin,
+      const InternalKey* smallest_compaction_key,
+      const InternalKey* largest_compaction_key, bool allow_unprepared_value);
 
   // If a seek to internal key "k" in specified file finds an entry,
   // call get_context->SaveValue() repeatedly until
@@ -91,7 +92,7 @@ class TableCache {
              GetContext* get_context,
              const SliceTransform* prefix_extractor = nullptr,
              HistogramImpl* file_read_hist = nullptr, bool skip_filters = false,
-             int level = -1);
+             int level = -1, size_t max_file_size_for_l0_meta_pin = 0);
 
   // Return the range delete tombstone iterator of the file specified by
   // `file_meta`.
@@ -128,14 +129,15 @@ class TableCache {
   // Find table reader
   // @param skip_filters Disables loading/accessing the filter block
   // @param level == -1 means not specified
-  Status FindTable(const EnvOptions& toptions,
+  Status FindTable(const FileOptions& toptions,
                    const InternalKeyComparator& internal_comparator,
                    const FileDescriptor& file_fd, Cache::Handle**,
                    const SliceTransform* prefix_extractor = nullptr,
                    const bool no_io = false, bool record_read_stats = true,
                    HistogramImpl* file_read_hist = nullptr,
                    bool skip_filters = false, int level = -1,
-                   bool prefetch_index_and_filter_in_cache = true);
+                   bool prefetch_index_and_filter_in_cache = true,
+                   size_t max_file_size_for_l0_meta_pin = 0);
 
   // Get TableReader from a cache handle.
   TableReader* GetTableReaderFromHandle(Cache::Handle* handle);
@@ -146,7 +148,7 @@ class TableCache {
   // @returns: `properties` will be reset on success. Please note that we will
   //            return Status::Incomplete() if table is not present in cache and
   //            we set `no_io` to be true.
-  Status GetTableProperties(const EnvOptions& toptions,
+  Status GetTableProperties(const FileOptions& toptions,
                             const InternalKeyComparator& internal_comparator,
                             const FileDescriptor& file_meta,
                             std::shared_ptr<const TableProperties>* properties,
@@ -156,7 +158,7 @@ class TableCache {
   // Return total memory usage of the table reader of the file.
   // 0 if table reader of the file is not loaded.
   size_t GetMemoryUsageByTableReader(
-      const EnvOptions& toptions,
+      const FileOptions& toptions,
       const InternalKeyComparator& internal_comparator,
       const FileDescriptor& fd,
       const SliceTransform* prefix_extractor = nullptr);
@@ -193,14 +195,15 @@ class TableCache {
 
  private:
   // Build a table reader
-  Status GetTableReader(const EnvOptions& env_options,
+  Status GetTableReader(const FileOptions& file_options,
                         const InternalKeyComparator& internal_comparator,
                         const FileDescriptor& fd, bool sequential_mode,
                         bool record_read_stats, HistogramImpl* file_read_hist,
                         std::unique_ptr<TableReader>* table_reader,
                         const SliceTransform* prefix_extractor = nullptr,
                         bool skip_filters = false, int level = -1,
-                        bool prefetch_index_and_filter_in_cache = true);
+                        bool prefetch_index_and_filter_in_cache = true,
+                        size_t max_file_size_for_l0_meta_pin = 0);
 
   // Create a key prefix for looking up the row cache. The prefix is of the
   // format row_cache_id + fd_number + seq_no. Later, the user key can be
@@ -216,11 +219,12 @@ class TableCache {
                        size_t prefix_size, GetContext* get_context);
 
   const ImmutableCFOptions& ioptions_;
-  const EnvOptions& env_options_;
+  const FileOptions& file_options_;
   Cache* const cache_;
   std::string row_cache_id_;
   bool immortal_tables_;
   BlockCacheTracer* const block_cache_tracer_;
+  Striped<port::Mutex, Slice> loader_mutex_;
 };
 
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE
