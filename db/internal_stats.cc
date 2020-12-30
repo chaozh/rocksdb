@@ -13,13 +13,14 @@
 #include <algorithm>
 #include <cinttypes>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "db/column_family.h"
 #include "db/db_impl/db_impl.h"
-#include "table/block_based/block_based_table_factory.h"
+#include "rocksdb/table.h"
 #include "util/string_util.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -60,6 +61,7 @@ void PrintLevelStatsHeader(char* buf, size_t len, const std::string& cf_name,
                            const std::string& group_by) {
   int written_size =
       snprintf(buf, len, "\n** Compaction Stats [%s] **\n", cf_name.c_str());
+  written_size = std::min(written_size, static_cast<int>(len));
   auto hdr = [](LevelStatType t) {
     return InternalStats::compaction_level_stats.at(t).header_name.c_str();
   };
@@ -79,6 +81,7 @@ void PrintLevelStatsHeader(char* buf, size_t len, const std::string& cf_name,
       hdr(LevelStatType::KEY_DROP));
 
   written_size += line_size;
+  written_size = std::min(written_size, static_cast<int>(len));
   snprintf(buf + written_size, len - written_size, "%s\n",
            std::string(line_size, '-').c_str());
 }
@@ -375,10 +378,11 @@ const std::unordered_map<std::string, DBPropertyInfo>
          {false, &InternalStats::HandleSsTables, nullptr, nullptr, nullptr}},
         {DB::Properties::kAggregatedTableProperties,
          {false, &InternalStats::HandleAggregatedTableProperties, nullptr,
-          nullptr, nullptr}},
+          &InternalStats::HandleAggregatedTablePropertiesMap, nullptr}},
         {DB::Properties::kAggregatedTablePropertiesAtLevel,
          {false, &InternalStats::HandleAggregatedTablePropertiesAtLevel,
-          nullptr, nullptr, nullptr}},
+          nullptr, &InternalStats::HandleAggregatedTablePropertiesAtLevelMap,
+          nullptr}},
         {DB::Properties::kNumImmutableMemTable,
          {false, nullptr, &InternalStats::HandleNumImmutableMemTable, nullptr,
           nullptr}},
@@ -507,11 +511,12 @@ bool InternalStats::GetStringProperty(const DBPropertyInfo& property_info,
 }
 
 bool InternalStats::GetMapProperty(const DBPropertyInfo& property_info,
-                                   const Slice& /*property*/,
+                                   const Slice& property,
                                    std::map<std::string, std::string>* value) {
   assert(value != nullptr);
   assert(property_info.handle_map != nullptr);
-  return (this->*(property_info.handle_map))(value);
+  Slice arg = GetPropertyNameAndArg(property).second;
+  return (this->*(property_info.handle_map))(value, arg);
 }
 
 bool InternalStats::GetIntProperty(const DBPropertyInfo& property_info,
@@ -587,7 +592,7 @@ bool InternalStats::HandleStats(std::string* value, Slice suffix) {
 }
 
 bool InternalStats::HandleCFMapStats(
-    std::map<std::string, std::string>* cf_stats) {
+    std::map<std::string, std::string>* cf_stats, Slice /*suffix*/) {
   DumpCFMapStats(cf_stats);
   return true;
 }
@@ -631,7 +636,27 @@ bool InternalStats::HandleAggregatedTableProperties(std::string* value,
   return true;
 }
 
-bool InternalStats::HandleAggregatedTablePropertiesAtLevel(std::string* value,
+static std::map<std::string, std::string> MapUint64ValuesToString(
+    const std::map<std::string, uint64_t>& from) {
+  std::map<std::string, std::string> to;
+  for (const auto& e : from) {
+    to[e.first] = ToString(e.second);
+  }
+  return to;
+}
+
+bool InternalStats::HandleAggregatedTablePropertiesMap(
+    std::map<std::string, std::string>* values, Slice /*suffix*/) {
+  std::shared_ptr<const TableProperties> tp;
+  auto s = cfd_->current()->GetAggregatedTableProperties(&tp);
+  if (!s.ok()) {
+    return false;
+  }
+  *values = MapUint64ValuesToString(tp->GetAggregatablePropertiesAsMap());
+  return true;
+}
+
+bool InternalStats::HandleAggregatedTablePropertiesAtLevel(std::string* values,
                                                            Slice suffix) {
   uint64_t level;
   bool ok = ConsumeDecimalNumber(&suffix, &level) && suffix.empty();
@@ -644,7 +669,24 @@ bool InternalStats::HandleAggregatedTablePropertiesAtLevel(std::string* value,
   if (!s.ok()) {
     return false;
   }
-  *value = tp->ToString();
+  *values = tp->ToString();
+  return true;
+}
+
+bool InternalStats::HandleAggregatedTablePropertiesAtLevelMap(
+    std::map<std::string, std::string>* values, Slice suffix) {
+  uint64_t level;
+  bool ok = ConsumeDecimalNumber(&suffix, &level) && suffix.empty();
+  if (!ok || static_cast<int>(level) >= number_levels_) {
+    return false;
+  }
+  std::shared_ptr<const TableProperties> tp;
+  auto s = cfd_->current()->GetAggregatedTableProperties(
+      &tp, static_cast<int>(level));
+  if (!s.ok()) {
+    return false;
+  }
+  *values = MapUint64ValuesToString(tp->GetAggregatablePropertiesAsMap());
   return true;
 }
 
@@ -798,7 +840,7 @@ bool InternalStats::HandleCurrentSuperVersionNumber(uint64_t* value,
 
 bool InternalStats::HandleIsFileDeletionsEnabled(uint64_t* value, DBImpl* db,
                                                  Version* /*version*/) {
-  *value = db->IsFileDeletionsEnabled();
+  *value = db->IsFileDeletionsEnabled() ? 1 : 0;
   return true;
 }
 
@@ -907,19 +949,9 @@ bool InternalStats::HandleBlockCacheStat(Cache** block_cache) {
   assert(block_cache != nullptr);
   auto* table_factory = cfd_->ioptions()->table_factory;
   assert(table_factory != nullptr);
-  if (BlockBasedTableFactory::kName != table_factory->Name()) {
-    return false;
-  }
-  auto* table_options =
-      reinterpret_cast<BlockBasedTableOptions*>(table_factory->GetOptions());
-  if (table_options == nullptr) {
-    return false;
-  }
-  *block_cache = table_options->block_cache.get();
-  if (table_options->no_block_cache || *block_cache == nullptr) {
-    return false;
-  }
-  return true;
+  *block_cache =
+      table_factory->GetOptions<Cache>(TableFactory::kBlockCacheOpts());
+  return *block_cache != nullptr;
 }
 
 bool InternalStats::HandleBlockCacheCapacity(uint64_t* value, DBImpl* /*db*/,
@@ -1396,21 +1428,26 @@ void InternalStats::DumpCFStatsNoFileHistogram(std::string* value) {
 }
 
 void InternalStats::DumpCFFileHistogram(std::string* value) {
-  char buf[2000];
-  snprintf(buf, sizeof(buf),
-           "\n** File Read Latency Histogram By Level [%s] **\n",
-           cfd_->GetName().c_str());
-  value->append(buf);
+  assert(value);
+  assert(cfd_);
+
+  std::ostringstream oss;
+  oss << "\n** File Read Latency Histogram By Level [" << cfd_->GetName()
+      << "] **\n";
 
   for (int level = 0; level < number_levels_; level++) {
     if (!file_read_latency_[level].Empty()) {
-      char buf2[5000];
-      snprintf(buf2, sizeof(buf2),
-               "** Level %d read latency histogram (micros):\n%s\n", level,
-               file_read_latency_[level].ToString().c_str());
-      value->append(buf2);
+      oss << "** Level " << level << " read latency histogram (micros):\n"
+          << file_read_latency_[level].ToString() << '\n';
     }
   }
+
+  if (!blob_file_read_latency_.Empty()) {
+    oss << "** Blob file read latency histogram (micros):\n"
+        << blob_file_read_latency_.ToString() << '\n';
+  }
+
+  value->append(oss.str());
 }
 
 #else

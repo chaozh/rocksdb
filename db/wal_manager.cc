@@ -121,7 +121,7 @@ Status WalManager::GetUpdatesSince(
   }
   iter->reset(new TransactionLogIteratorImpl(
       db_options_.wal_dir, &db_options_, read_options, file_options_, seq,
-      std::move(wal_files), version_set, seq_per_batch_));
+      std::move(wal_files), version_set, seq_per_batch_, io_tracer_));
   return (*iter)->status();
 }
 
@@ -175,7 +175,7 @@ void WalManager::PurgeObsoleteWALFiles() {
   for (auto& f : files) {
     uint64_t number;
     FileType type;
-    if (ParseFileName(f, &number, &type) && type == kLogFile) {
+    if (ParseFileName(f, &number, &type) && type == kWalFile) {
       std::string const file_path = archival_dir + "/" + f;
       if (ttl_enabled) {
         uint64_t file_m_time;
@@ -243,9 +243,13 @@ void WalManager::PurgeObsoleteWALFiles() {
 
   size_t files_del_num = log_files_num - files_keep_num;
   VectorLogPtr archived_logs;
-  GetSortedWalsOfType(archival_dir, archived_logs, kArchivedLogFile);
-
-  if (files_del_num > archived_logs.size()) {
+  s = GetSortedWalsOfType(archival_dir, archived_logs, kArchivedLogFile);
+  if (!s.ok()) {
+    ROCKS_LOG_WARN(db_options_.info_log,
+                   "Unable to get archived WALs from: %s: %s",
+                   archival_dir.c_str(), s.ToString().c_str());
+    files_del_num = 0;
+  } else if (files_del_num > archived_logs.size()) {
     ROCKS_LOG_WARN(db_options_.info_log,
                    "Trying to delete more archived log files than "
                    "exist. Deleting all");
@@ -292,7 +296,7 @@ Status WalManager::GetSortedWalsOfType(const std::string& path,
   for (const auto& f : all_files) {
     uint64_t number;
     FileType type;
-    if (ParseFileName(f, &number, &type) && type == kLogFile) {
+    if (ParseFileName(f, &number, &type) && type == kWalFile) {
       SequenceNumber sequence;
       Status s = ReadFirstRecord(log_type, number, &sequence);
       if (!s.ok()) {
@@ -467,7 +471,7 @@ Status WalManager::ReadFirstLine(const std::string& fname,
                                          fs_->OptimizeForLogRead(file_options_),
                                          &file, nullptr);
   std::unique_ptr<SequentialFileReader> file_reader(
-      new SequentialFileReader(std::move(file), fname));
+      new SequentialFileReader(std::move(file), fname, io_tracer_));
 
   if (!status.ok()) {
     return status;
@@ -492,14 +496,19 @@ Status WalManager::ReadFirstLine(const std::string& fname,
       // TODO read record's till the first no corrupt entry?
     } else {
       WriteBatch batch;
-      WriteBatchInternal::SetContents(&batch, record);
-      *sequence = WriteBatchInternal::Sequence(&batch);
-      return Status::OK();
+      // We can overwrite an existing non-OK Status since it'd only reach here
+      // with `paranoid_checks == false`.
+      status = WriteBatchInternal::SetContents(&batch, record);
+      if (status.ok()) {
+        *sequence = WriteBatchInternal::Sequence(&batch);
+        return status;
+      }
     }
   }
 
-  // ReadRecord returns false on EOF, which means that the log file is empty. we
-  // return status.ok() in that case and set sequence number to 0
+  // ReadRecord might have returned false on EOF, which means that the log file
+  // is empty. Or, a failure may have occurred while processing the first entry.
+  // In any case, return status and set sequence number to 0.
   *sequence = 0;
   return status;
 }

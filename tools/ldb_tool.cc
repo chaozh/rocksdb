@@ -87,6 +87,7 @@ void LDBCommandRunner::PrintHelp(const LDBOptions& ldb_options,
   DBLoaderCommand::Help(ret);
   ManifestDumpCommand::Help(ret);
   FileChecksumDumpCommand::Help(ret);
+  GetPropertyCommand::Help(ret);
   ListColumnFamiliesCommand::Help(ret);
   CreateColumnFamilyCommand::Help(ret);
   DropColumnFamilyCommand::Help(ret);
@@ -98,6 +99,7 @@ void LDBCommandRunner::PrintHelp(const LDBOptions& ldb_options,
   CheckPointCommand::Help(ret);
   WriteExternalSstFilesCommand::Help(ret);
   IngestExternalSstFilesCommand::Help(ret);
+  UnsafeRemoveSstFileCommand::Help(ret);
 
   fprintf(to_stderr ? stderr : stdout, "%s\n", ret.c_str());
 }
@@ -107,7 +109,10 @@ int LDBCommandRunner::RunCommand(
     const LDBOptions& ldb_options,
     const std::vector<ColumnFamilyDescriptor>* column_families) {
   if (argc <= 2) {
-    if (std::string(argv[1]) == "--version") {
+    if (argc <= 1) {
+      PrintHelp(ldb_options, argv[0], /*to_stderr*/ true);
+      return 1;
+    } else if (std::string(argv[1]) == "--version") {
       printf("ldb from RocksDB %d.%d.%d\n", ROCKSDB_MAJOR, ROCKSDB_MINOR,
              ROCKSDB_PATCH);
       return 0;

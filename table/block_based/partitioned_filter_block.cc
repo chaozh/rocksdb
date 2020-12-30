@@ -7,6 +7,7 @@
 
 #include <utility>
 
+#include "file/file_util.h"
 #include "monitoring/perf_context_imp.h"
 #include "port/malloc.h"
 #include "port/port.h"
@@ -33,15 +34,16 @@ PartitionedFilterBlockBuilder::PartitionedFilterBlockBuilder(
                                                  use_value_delta_encoding),
       p_index_builder_(p_index_builder),
       keys_added_to_partition_(0) {
-  keys_per_partition_ =
-      filter_bits_builder_->CalculateNumEntry(partition_size);
+  keys_per_partition_ = static_cast<uint32_t>(
+      filter_bits_builder_->ApproximateNumEntries(partition_size));
   if (keys_per_partition_ < 1) {
     // partition_size (minus buffer, ~10%) might be smaller than minimum
     // filter size, sometimes based on cache line size. Try to find that
     // minimum size without CalculateSpace (not necessarily available).
     uint32_t larger = std::max(partition_size + 4, uint32_t{16});
     for (;;) {
-      keys_per_partition_ = filter_bits_builder_->CalculateNumEntry(larger);
+      keys_per_partition_ = static_cast<uint32_t>(
+          filter_bits_builder_->ApproximateNumEntries(larger));
       if (keys_per_partition_ >= 1) {
         break;
       }
@@ -149,18 +151,18 @@ PartitionedFilterBlockReader::PartitionedFilterBlockReader(
     : FilterBlockReaderCommon(t, std::move(filter_block)) {}
 
 std::unique_ptr<FilterBlockReader> PartitionedFilterBlockReader::Create(
-    const BlockBasedTable* table, FilePrefetchBuffer* prefetch_buffer,
-    bool use_cache, bool prefetch, bool pin,
-    BlockCacheLookupContext* lookup_context) {
+    const BlockBasedTable* table, const ReadOptions& ro,
+    FilePrefetchBuffer* prefetch_buffer, bool use_cache, bool prefetch,
+    bool pin, BlockCacheLookupContext* lookup_context) {
   assert(table);
   assert(table->get_rep());
   assert(!pin || prefetch);
 
   CachableEntry<Block> filter_block;
   if (prefetch || !use_cache) {
-    const Status s = ReadFilterBlock(table, prefetch_buffer, ReadOptions(),
-                                     use_cache, nullptr /* get_context */,
-                                     lookup_context, &filter_block);
+    const Status s = ReadFilterBlock(table, prefetch_buffer, ro, use_cache,
+                                     nullptr /* get_context */, lookup_context,
+                                     &filter_block);
     if (!s.ok()) {
       IGNORE_STATUS_IF_ERROR(s);
       return std::unique_ptr<FilterBlockReader>();
@@ -237,7 +239,7 @@ BlockHandle PartitionedFilterBlockReader::GetFilterPartitionHandle(
   const InternalKeyComparator* const comparator = internal_comparator();
   Statistics* kNullStats = nullptr;
   filter_block.GetValue()->NewIndexIterator(
-      comparator, comparator->user_comparator(),
+      comparator->user_comparator(),
       table()->get_rep()->get_global_seqno(BlockType::kFilter), &iter,
       kNullStats, true /* total_order_seek */, false /* have_first_key */,
       index_key_includes_seq(), index_value_is_full());
@@ -411,7 +413,8 @@ size_t PartitionedFilterBlockReader::ApproximateMemoryUsage() const {
 }
 
 // TODO(myabandeh): merge this with the same function in IndexReader
-void PartitionedFilterBlockReader::CacheDependencies(bool pin) {
+Status PartitionedFilterBlockReader::CacheDependencies(const ReadOptions& ro,
+                                                       bool pin) {
   assert(table());
 
   const BlockBasedTable::Rep* const rep = table()->get_rep();
@@ -424,12 +427,11 @@ void PartitionedFilterBlockReader::CacheDependencies(bool pin) {
   Status s = GetOrReadFilterBlock(false /* no_io */, nullptr /* get_context */,
                                   &lookup_context, &filter_block);
   if (!s.ok()) {
-    ROCKS_LOG_WARN(rep->ioptions.info_log,
-                   "Error retrieving top-level filter block while trying to "
-                   "cache filter partitions: %s",
-                   s.ToString().c_str());
-    IGNORE_STATUS_IF_ERROR(s);
-    return;
+    ROCKS_LOG_ERROR(rep->ioptions.info_log,
+                    "Error retrieving top-level filter block while trying to "
+                    "cache filter partitions: %s",
+                    s.ToString().c_str());
+    return s;
   }
 
   // Before read partitions, prefetch them to avoid lots of IOs
@@ -439,10 +441,10 @@ void PartitionedFilterBlockReader::CacheDependencies(bool pin) {
   const InternalKeyComparator* const comparator = internal_comparator();
   Statistics* kNullStats = nullptr;
   filter_block.GetValue()->NewIndexIterator(
-      comparator, comparator->user_comparator(),
-      rep->get_global_seqno(BlockType::kFilter), &biter, kNullStats,
-      true /* total_order_seek */, false /* have_first_key */,
-      index_key_includes_seq(), index_value_is_full());
+      comparator->user_comparator(), rep->get_global_seqno(BlockType::kFilter),
+      &biter, kNullStats, true /* total_order_seek */,
+      false /* have_first_key */, index_key_includes_seq(),
+      index_value_is_full());
   // Index partitions are assumed to be consecuitive. Prefetch them all.
   // Read the first block offset
   biter.SeekToFirst();
@@ -455,13 +457,19 @@ void PartitionedFilterBlockReader::CacheDependencies(bool pin) {
   uint64_t last_off = handle.offset() + handle.size() + kBlockTrailerSize;
   uint64_t prefetch_len = last_off - prefetch_off;
   std::unique_ptr<FilePrefetchBuffer> prefetch_buffer;
+  rep->CreateFilePrefetchBuffer(0, 0, &prefetch_buffer);
 
-  prefetch_buffer.reset(new FilePrefetchBuffer());
-  s = prefetch_buffer->Prefetch(rep->file.get(), prefetch_off,
-                                static_cast<size_t>(prefetch_len));
+  IOOptions opts;
+  s = PrepareIOFromReadOptions(ro, rep->file->env(), opts);
+  if (s.ok()) {
+    s = prefetch_buffer->Prefetch(opts, rep->file.get(), prefetch_off,
+                                  static_cast<size_t>(prefetch_len));
+  }
+  if (!s.ok()) {
+    return s;
+  }
 
   // After prefetch, read the partitions one by one
-  ReadOptions read_options;
   for (biter.SeekToFirst(); biter.Valid(); biter.Next()) {
     handle = biter.value().handle;
 
@@ -469,20 +477,23 @@ void PartitionedFilterBlockReader::CacheDependencies(bool pin) {
     // TODO: Support counter batch update for partitioned index and
     // filter blocks
     s = table()->MaybeReadBlockAndLoadToCache(
-        prefetch_buffer.get(), read_options, handle,
-        UncompressionDict::GetEmptyDict(), &block, BlockType::kFilter,
-        nullptr /* get_context */, &lookup_context, nullptr /* contents */);
-
+        prefetch_buffer.get(), ro, handle, UncompressionDict::GetEmptyDict(),
+        &block, BlockType::kFilter, nullptr /* get_context */, &lookup_context,
+        nullptr /* contents */);
+    if (!s.ok()) {
+      return s;
+    }
     assert(s.ok() || block.GetValue() == nullptr);
-    if (s.ok() && block.GetValue() != nullptr) {
+
+    if (block.GetValue() != nullptr) {
       if (block.IsCached()) {
         if (pin) {
           filter_map_[handle.offset()] = std::move(block);
         }
       }
     }
-    IGNORE_STATUS_IF_ERROR(s);
   }
+  return biter.status();
 }
 
 const InternalKeyComparator* PartitionedFilterBlockReader::internal_comparator()

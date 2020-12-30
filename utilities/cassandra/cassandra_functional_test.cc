@@ -4,18 +4,19 @@
 //  (found in the LICENSE.Apache file in the root directory).
 
 #include <iostream>
+
 #include "db/db_impl/db_impl.h"
 #include "rocksdb/db.h"
 #include "rocksdb/merge_operator.h"
 #include "rocksdb/utilities/db_ttl.h"
 #include "test_util/testharness.h"
+#include "util/cast_util.h"
 #include "util/random.h"
 #include "utilities/cassandra/cassandra_compaction_filter.h"
 #include "utilities/cassandra/merge_operator.h"
 #include "utilities/cassandra/test_utils.h"
 #include "utilities/merge_operators.h"
 
-using namespace ROCKSDB_NAMESPACE;
 
 namespace ROCKSDB_NAMESPACE {
 namespace cassandra {
@@ -57,14 +58,17 @@ class CassandraStore {
     }
   }
 
-  void Flush() {
-    dbfull()->TEST_FlushMemTable();
-    dbfull()->TEST_WaitForCompact();
+  Status Flush() {
+    Status s = dbfull()->TEST_FlushMemTable();
+    if (s.ok()) {
+      s = dbfull()->TEST_WaitForCompact();
+    }
+    return s;
   }
 
-  void Compact() {
-    dbfull()->TEST_CompactRange(
-      0, nullptr, nullptr, db_->DefaultColumnFamily());
+  Status Compact() {
+    return dbfull()->TEST_CompactRange(0, nullptr, nullptr,
+                                       db_->DefaultColumnFamily());
   }
 
   std::tuple<bool, RowValue> Get(const std::string& key){
@@ -89,7 +93,7 @@ class CassandraStore {
   WriteOptions write_option_;
   ReadOptions get_option_;
 
-  DBImpl* dbfull() { return reinterpret_cast<DBImpl*>(db_.get()); }
+  DBImpl* dbfull() { return static_cast_with_check<DBImpl>(db_.get()); }
 };
 
 class TestCompactionFilterFactory : public CompactionFilterFactory {
@@ -188,15 +192,15 @@ TEST_F(CassandraFunctionalTest,
     CreateTestColumnSpec(kTombstone, 3, ToMicroSeconds(now))
   }));
 
-  store.Flush();
+  ASSERT_OK(store.Flush());
 
   store.Append("k1",CreateTestRowValue({
     CreateTestColumnSpec(kExpiringColumn, 0, ToMicroSeconds(now - kTtl - 10)), //expired
     CreateTestColumnSpec(kColumn, 2, ToMicroSeconds(now))
   }));
 
-  store.Flush();
-  store.Compact();
+  ASSERT_OK(store.Flush());
+  ASSERT_OK(store.Compact());
 
   auto ret = store.Get("k1");
   ASSERT_TRUE(std::get<0>(ret));
@@ -225,15 +229,15 @@ TEST_F(CassandraFunctionalTest,
     CreateTestColumnSpec(kTombstone, 3, ToMicroSeconds(now))
   }));
 
-  store.Flush();
+  ASSERT_OK(store.Flush());
 
   store.Append("k1",CreateTestRowValue({
     CreateTestColumnSpec(kExpiringColumn, 0, ToMicroSeconds(now - kTtl - 10)), //expired
     CreateTestColumnSpec(kColumn, 2, ToMicroSeconds(now))
   }));
 
-  store.Flush();
-  store.Compact();
+  ASSERT_OK(store.Flush());
+  ASSERT_OK(store.Compact());
 
   auto ret = store.Get("k1");
   ASSERT_TRUE(std::get<0>(ret));
@@ -258,14 +262,14 @@ TEST_F(CassandraFunctionalTest,
     CreateTestColumnSpec(kExpiringColumn, 1, ToMicroSeconds(now - kTtl - 20)),
   }));
 
-  store.Flush();
+  ASSERT_OK(store.Flush());
 
   store.Append("k1",CreateTestRowValue({
     CreateTestColumnSpec(kExpiringColumn, 0, ToMicroSeconds(now - kTtl - 10)),
   }));
 
-  store.Flush();
-  store.Compact();
+  ASSERT_OK(store.Flush());
+  ASSERT_OK(store.Compact());
   ASSERT_FALSE(std::get<0>(store.Get("k1")));
 }
 
@@ -284,14 +288,14 @@ TEST_F(CassandraFunctionalTest,
     CreateTestColumnSpec(kColumn, 0, ToMicroSeconds(now))
   }));
 
-  store.Flush();
+  ASSERT_OK(store.Flush());
 
   store.Append("k1",CreateTestRowValue({
     CreateTestColumnSpec(kColumn, 1, ToMicroSeconds(now)),
   }));
 
-  store.Flush();
-  store.Compact();
+  ASSERT_OK(store.Flush());
+  ASSERT_OK(store.Compact());
 
   auto ret = store.Get("k1");
   ASSERT_TRUE(std::get<0>(ret));
@@ -309,8 +313,8 @@ TEST_F(CassandraFunctionalTest, CompactionShouldRemoveTombstoneFromPut) {
     CreateTestColumnSpec(kTombstone, 0, ToMicroSeconds(now - gc_grace_period_in_seconds_ - 1)),
   }));
 
-  store.Flush();
-  store.Compact();
+  ASSERT_OK(store.Flush());
+  ASSERT_OK(store.Compact());
   ASSERT_FALSE(std::get<0>(store.Get("k1")));
 }
 

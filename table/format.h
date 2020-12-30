@@ -110,19 +110,11 @@ struct IndexValue {
   std::string ToString(bool hex, bool have_first_key) const;
 };
 
-inline uint32_t GetCompressFormatForVersion(CompressionType compression_type,
-                                            uint32_t version) {
-#ifdef NDEBUG
-  (void)compression_type;
-#endif
-  // snappy is not versioned
-  assert(compression_type != kSnappyCompression &&
-         compression_type != kXpressCompression &&
-         compression_type != kNoCompression);
-  // As of version 2, we encode compressed block with
+inline uint32_t GetCompressFormatForVersion(uint32_t format_version) {
+  // As of format_version 2, we encode compressed block with
   // compress_format_version == 2. Before that, the version is 1.
   // DO NOT CHANGE THIS FUNCTION, it affects disk format
-  return version >= 2 ? 2 : 1;
+  return format_version >= 2 ? 2 : 1;
 }
 
 inline bool BlockBasedTableSupportedVersion(uint32_t version) {
@@ -215,7 +207,7 @@ class Footer {
 // Read the footer from file
 // If enforce_table_magic_number != 0, ReadFooterFromFile() will return
 // corruption if table_magic number is not equal to enforce_table_magic_number
-Status ReadFooterFromFile(RandomAccessFileReader* file,
+Status ReadFooterFromFile(const IOOptions& opts, RandomAccessFileReader* file,
                           FilePrefetchBuffer* prefetch_buffer,
                           uint64_t file_size, Footer* footer,
                           uint64_t enforce_table_magic_number = 0);
@@ -338,6 +330,9 @@ extern Status UncompressBlockContentsForCompressionType(
     const UncompressionInfo& info, const char* data, size_t n,
     BlockContents* contents, uint32_t compress_format_version,
     const ImmutableCFOptions& ioptions, MemoryAllocator* allocator = nullptr);
+
+// Replace db_host_id contents with the real hostname if necessary
+extern Status ReifyDbHostIdProperty(Env* env, std::string* db_host_id);
 
 // Implementation details follow.  Clients should ignore,
 

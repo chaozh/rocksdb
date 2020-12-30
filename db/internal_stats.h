@@ -44,7 +44,9 @@ struct DBPropertyInfo {
                                     Version* version);
 
   // @param props Map of general properties to populate
-  bool (InternalStats::*handle_map)(std::map<std::string, std::string>* props);
+  // @param suffix Argument portion of the property. (see handle_string)
+  bool (InternalStats::*handle_map)(std::map<std::string, std::string>* props,
+                                    Slice suffix);
 
   // handle the string type properties rely on DBImpl methods
   // @param value Value-result argument for storing the property's string value
@@ -335,6 +337,7 @@ class InternalStats {
     for (auto& h : file_read_latency_) {
       h.Clear();
     }
+    blob_file_read_latency_.Clear();
     cf_stats_snapshot_.Clear();
     db_stats_snapshot_.Clear();
     bg_error_count_ = 0;
@@ -375,6 +378,8 @@ class InternalStats {
     return &file_read_latency_[level];
   }
 
+  HistogramImpl* GetBlobFileReadHist() { return &blob_file_read_latency_; }
+
   uint64_t GetBackgroundErrorCount() const { return bg_error_count_; }
 
   uint64_t BumpAndGetBackgroundErrorCount() { return ++bg_error_count_; }
@@ -391,6 +396,8 @@ class InternalStats {
 
   bool GetIntPropertyOutOfMutex(const DBPropertyInfo& property_info,
                                 Version* version, uint64_t* value);
+
+  const uint64_t* TEST_GetCFStatsValue() const { return cf_stats_value_; }
 
   const std::vector<CompactionStats>& TEST_GetCompactionStats() const {
     return comp_stats_;
@@ -424,6 +431,7 @@ class InternalStats {
   std::vector<CompactionStats> comp_stats_;
   std::vector<CompactionStats> comp_stats_by_pri_;
   std::vector<HistogramImpl> file_read_latency_;
+  HistogramImpl blob_file_read_latency_;
 
   // Used to compute per-interval statistics
   struct CFStatsSnapshot {
@@ -519,7 +527,8 @@ class InternalStats {
   bool HandleCompressionRatioAtLevelPrefix(std::string* value, Slice suffix);
   bool HandleLevelStats(std::string* value, Slice suffix);
   bool HandleStats(std::string* value, Slice suffix);
-  bool HandleCFMapStats(std::map<std::string, std::string>* compaction_stats);
+  bool HandleCFMapStats(std::map<std::string, std::string>* compaction_stats,
+                        Slice suffix);
   bool HandleCFStats(std::string* value, Slice suffix);
   bool HandleCFStatsNoFileHistogram(std::string* value, Slice suffix);
   bool HandleCFFileHistogram(std::string* value, Slice suffix);
@@ -527,6 +536,10 @@ class InternalStats {
   bool HandleSsTables(std::string* value, Slice suffix);
   bool HandleAggregatedTableProperties(std::string* value, Slice suffix);
   bool HandleAggregatedTablePropertiesAtLevel(std::string* value, Slice suffix);
+  bool HandleAggregatedTablePropertiesMap(
+      std::map<std::string, std::string>* values, Slice suffix);
+  bool HandleAggregatedTablePropertiesAtLevelMap(
+      std::map<std::string, std::string>* values, Slice suffix);
   bool HandleNumImmutableMemTable(uint64_t* value, DBImpl* db,
                                   Version* version);
   bool HandleNumImmutableMemTableFlushed(uint64_t* value, DBImpl* db,
@@ -666,6 +679,8 @@ class InternalStats {
                   bool /*concurrent */ = false) {}
 
   HistogramImpl* GetFileReadHist(int /*level*/) { return nullptr; }
+
+  HistogramImpl* GetBlobFileReadHist() { return nullptr; }
 
   uint64_t GetBackgroundErrorCount() const { return 0; }
 
