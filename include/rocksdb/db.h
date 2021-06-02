@@ -112,7 +112,7 @@ struct RangePtr {
 };
 
 // It is valid that files_checksums and files_checksum_func_names are both
-// empty (no checksum informaiton is provided for ingestion). Otherwise,
+// empty (no checksum information is provided for ingestion). Otherwise,
 // their sizes should be the same as external_files. The file order should
 // be the same in three vectors and guaranteed by the caller.
 struct IngestExternalFileArg {
@@ -205,11 +205,11 @@ class DB {
   // to open the primary instance.
   // The secondary_path argument points to a directory where the secondary
   // instance stores its info log.
-  // The column_families argument specifieds a list of column families to open.
+  // The column_families argument specifies a list of column families to open.
   // If any of the column families does not exist, the function returns non-OK
   // status.
   // The handles is an out-arg corresponding to the opened database column
-  // familiy handles.
+  // family handles.
   // The dbptr is an out-arg corresponding to the opened secondary instance.
   // The pointer points to a heap-allocated database, and the caller should
   // delete it after use. Before deleting the dbptr, the user should also
@@ -238,6 +238,16 @@ class DB {
   static Status Open(const DBOptions& db_options, const std::string& name,
                      const std::vector<ColumnFamilyDescriptor>& column_families,
                      std::vector<ColumnFamilyHandle*>* handles, DB** dbptr);
+
+  // Open DB and run the compaction.
+  // It's a read-only operation, the result won't be installed to the DB, it
+  // will be output to the `output_directory`. The API should only be used with
+  // `options.CompactionService` to run compaction triggered by
+  // `CompactionService`.
+  static Status OpenAndCompact(
+      const std::string& name, const std::string& output_directory,
+      const std::string& input, std::string* output,
+      const CompactionServiceOptionsOverride& override_options);
 
   virtual Status Resume() { return Status::NotSupported(); }
 
@@ -745,7 +755,7 @@ class DB {
     static const std::string kCFStats;
 
     //  "rocksdb.cfstats-no-file-histogram" - returns a multi-line string with
-    //      general columm family stats per-level over db's lifetime ("L<n>"),
+    //      general column family stats per-level over db's lifetime ("L<n>"),
     //      aggregated over db's lifetime ("Sum"), and aggregated over the
     //      interval since the last retrieval ("Int").
     static const std::string kCFStatsNoFileHistogram;
@@ -762,6 +772,10 @@ class DB {
     //  "rocksdb.levelstats" - returns multi-line string containing the number
     //      of files per level and total size of each level (MB).
     static const std::string kLevelStats;
+
+    //  "rocksdb.block-cache-entry-stats" - returns a multi-line string or
+    //      map with statistics on block cache usage.
+    static const std::string kBlockCacheEntryStats;
 
     //  "rocksdb.num-immutable-mem-table" - returns number of immutable
     //      memtables that have not yet been flushed.
@@ -1025,7 +1039,7 @@ class DB {
                                      uint64_t* sizes) = 0;
 
   // Simpler versions of the GetApproximateSizes() method above.
-  // The include_flags argumenbt must of type DB::SizeApproximationFlags
+  // The include_flags argument must of type DB::SizeApproximationFlags
   // and can not be NONE.
   virtual Status GetApproximateSizes(ColumnFamilyHandle* column_family,
                                      const Range* ranges, int n,
@@ -1082,6 +1096,8 @@ class DB {
   // and the data is rearranged to reduce the cost of operations
   // needed to access the data.  This operation should typically only
   // be invoked by users who understand the underlying implementation.
+  // This call blocks until the operation completes successfully, fails,
+  // or is aborted (Status::Incomplete). See DisableManualCompaction.
   //
   // begin==nullptr is treated as a key before all keys in the database.
   // end==nullptr is treated as a key after all keys in the database.
@@ -1136,9 +1152,9 @@ class DB {
       const std::unordered_map<std::string, std::string>& new_options) = 0;
 
   // CompactFiles() inputs a list of files specified by file numbers and
-  // compacts them to the specified level. Note that the behavior is different
-  // from CompactRange() in that CompactFiles() performs the compaction job
-  // using the CURRENT thread.
+  // compacts them to the specified level. A small difference compared to
+  // CompactRange() is that CompactFiles() performs the compaction job
+  // using the CURRENT thread, so is not considered a "background" job.
   //
   // @see GetDataBaseMetaData
   // @see GetColumnFamilyMetaData
@@ -1180,7 +1196,16 @@ class DB {
   virtual Status EnableAutoCompaction(
       const std::vector<ColumnFamilyHandle*>& column_family_handles) = 0;
 
+  // After this function call, CompactRange() or CompactFiles() will not
+  // run compactions and fail. Calling this function will tell outstanding
+  // manual compactions to abort and will wait for them to finish or abort
+  // before returning.
   virtual void DisableManualCompaction() = 0;
+  // Re-enable CompactRange() and ComapctFiles() that are disabled by
+  // DisableManualCompaction(). This function must be called as many times
+  // as DisableManualCompaction() has been called in order to re-enable
+  // manual compactions, and must not be called more times than
+  // DisableManualCompaction() has been called.
   virtual void EnableManualCompaction() = 0;
 
   // Number of levels used for this DB.
@@ -1368,7 +1393,7 @@ class DB {
   virtual void GetLiveFilesMetaData(
       std::vector<LiveFileMetaData>* /*metadata*/) {}
 
-  // Return a list of all table file checksum info.
+  // Return a list of all table and blob files checksum info.
   // Note: This function might be of limited use because it cannot be
   // synchronized with GetLiveFiles.
   virtual Status GetLiveFilesChecksumInfo(FileChecksumList* checksum_list) = 0;
@@ -1612,7 +1637,7 @@ class DB {
   }
 
   // IO Tracing operations. Use EndIOTrace() to stop tracing.
-  virtual Status StartIOTrace(Env* /*env*/, const TraceOptions& /*options*/,
+  virtual Status StartIOTrace(const TraceOptions& /*options*/,
                               std::unique_ptr<TraceWriter>&& /*trace_writer*/) {
     return Status::NotSupported("StartIOTrace() is not implemented.");
   }
